@@ -58,7 +58,7 @@ const router = createBrowserRouter([
     element: <RootWrapper />,
     children: [
       {
-        element: <Layout banner={false} header={false} footer={false} />,
+        element: <Layout banner={false} header={false} />,
         children: [
           // {
           //   element: (
@@ -189,7 +189,7 @@ const router = createBrowserRouter([
         ],
       },
       {
-        element: <Layout footer={false} scrollLock />,
+        element: <Layout scrollLock />,
         children: [
           {
             path: "dorms/:roomId",

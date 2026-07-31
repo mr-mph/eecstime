@@ -3,7 +3,6 @@ import { Outlet } from "react-router";
 import { Flex } from "@repo/theme";
 
 import Banner from "@/components/Banner";
-import Footer from "@/components/Footer";
 import NavigationBar from "@/components/NavigationBar";
 import { useHeaderHeight } from "@/hooks/useHeaderHeight";
 import useMinWidth from "@/hooks/useMinWidth";
@@ -13,7 +12,6 @@ import styles from "./Layout.module.scss";
 interface LayoutProps {
   banner?: boolean;
   header?: boolean;
-  footer?: boolean;
   scrollLock?: boolean;
   headerBorder?: boolean;
 }
@@ -21,7 +19,6 @@ interface LayoutProps {
 export default function Layout({
   banner = true,
   header = true,
-  footer = true,
   scrollLock = false,
   headerBorder = true,
 }: LayoutProps) {
@@ -44,7 +41,6 @@ export default function Layout({
         )}
         <Outlet />
       </Flex>
-      {footer && <Footer />}
     </Flex>
   );
 }

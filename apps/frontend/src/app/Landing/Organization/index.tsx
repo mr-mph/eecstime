@@ -1,7 +1,5 @@
 import { Container, Flex } from "@repo/theme";
 
-import Footer from "@/components/Footer";
-
 import styles from "./Organization.module.scss";
 
 export default function Organization() {
@@ -28,11 +26,11 @@ export default function Organization() {
             >
               Berkeleytime
             </a>{" "}
-            that improves course discovery, enrollment planning, scheduling, and more.
+            that improves course discovery, enrollment planning, scheduling, and
+            more.
           </p>
         </div>
       </Container>
-      <Footer />
     </Flex>
   );
 }
