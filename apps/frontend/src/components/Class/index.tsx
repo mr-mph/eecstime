@@ -660,22 +660,29 @@ export default function Class({
                           variant="border"
                         />
                       )}
-                      <IconButton
-                        type="button"
-                        aria-label="Refresh enrollment from Berkeley Catalog"
-                        disabled={isDraft || refreshingEnrollment}
-                        onClick={(e: MouseEvent<HTMLButtonElement>) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          void handleRefreshEnrollment();
-                        }}
-                      >
-                        {refreshingEnrollment ? (
-                          <LoadingIndicator />
-                        ) : (
-                          <Refresh />
-                        )}
-                      </IconButton>
+                      <ThemeTooltip
+                        content="Refresh enrollment data"
+                        trigger={
+                          <span style={{ display: "inline-flex" }}>
+                            <IconButton
+                              type="button"
+                              aria-label="Refresh enrollment data"
+                              disabled={isDraft || refreshingEnrollment}
+                              onClick={(e: MouseEvent<HTMLButtonElement>) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                void handleRefreshEnrollment();
+                              }}
+                            >
+                              {refreshingEnrollment ? (
+                                <LoadingIndicator />
+                              ) : (
+                                <Refresh />
+                              )}
+                            </IconButton>
+                          </span>
+                        }
+                      />
                     </Flex>
                     <p className={styles.description}>{classTitle}</p>
                   </Flex>
