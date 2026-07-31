@@ -17,7 +17,6 @@ import { Tabs } from "radix-ui";
 import { Link, useLocation } from "react-router-dom";
 
 import {
-  ENROLLMENT_CATALOG_REFRESH_ENABLED,
   MetricName,
   REQUIRED_METRICS,
   USER_REQUIRED_RATINGS_TO_UNLOCK,
@@ -250,7 +249,7 @@ export default function Class({
   const primarySection = _class?.primarySection ?? null;
 
   const handleRefreshEnrollment = useCallback(async () => {
-    if (!ENROLLMENT_CATALOG_REFRESH_ENABLED || !_class) return;
+    if (!_class) return;
     try {
       await refreshClassEnrollment({
         variables: {
@@ -661,46 +660,22 @@ export default function Class({
                           variant="border"
                         />
                       )}
-                      <ThemeTooltip
-                        content={
-                          isDraft
-                            ? "Enrollment isn't available yet — this schedule is tentative and subject to change."
-                            : ENROLLMENT_CATALOG_REFRESH_ENABLED
-                              ? "Refresh enrollment from Berkeley Catalog"
-                              : "Enrollment scraping disabled for the time being due to request from UC Berkeley IT"
-                        }
-                        trigger={
-                          // Wrap when disabled so the tooltip still works.
-                          <span style={{ display: "inline-flex" }}>
-                            <IconButton
-                              type="button"
-                              aria-label={
-                                isDraft
-                                  ? "Enrollment isn't available yet — this schedule is tentative and subject to change."
-                                  : ENROLLMENT_CATALOG_REFRESH_ENABLED
-                                    ? "Refresh enrollment from Berkeley Catalog"
-                                    : "Enrollment scraping disabled for the time being due to request from UC Berkeley IT"
-                              }
-                              disabled={
-                                isDraft ||
-                                !ENROLLMENT_CATALOG_REFRESH_ENABLED ||
-                                refreshingEnrollment
-                              }
-                              onClick={(e: MouseEvent<HTMLButtonElement>) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                void handleRefreshEnrollment();
-                              }}
-                            >
-                              {refreshingEnrollment ? (
-                                <LoadingIndicator />
-                              ) : (
-                                <Refresh />
-                              )}
-                            </IconButton>
-                          </span>
-                        }
-                      />
+                      <IconButton
+                        type="button"
+                        aria-label="Refresh enrollment from Berkeley Catalog"
+                        disabled={isDraft || refreshingEnrollment}
+                        onClick={(e: MouseEvent<HTMLButtonElement>) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          void handleRefreshEnrollment();
+                        }}
+                      >
+                        {refreshingEnrollment ? (
+                          <LoadingIndicator />
+                        ) : (
+                          <Refresh />
+                        )}
+                      </IconButton>
                     </Flex>
                     <p className={styles.description}>{classTitle}</p>
                   </Flex>

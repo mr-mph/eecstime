@@ -424,6 +424,8 @@ export function parseAssociatedSectionEnrollments(
 export type FetchUcbCatalogEnrollmentOptions = {
   userAgent?: string;
   timeoutMs?: number;
+  /** Override fetch (e.g. backend rate-limited queue). Defaults to global fetch. */
+  fetch?: typeof globalThis.fetch;
 };
 
 export async function fetchUcbCatalogEnrollment(
@@ -432,6 +434,7 @@ export async function fetchUcbCatalogEnrollment(
 ): Promise<ParsedUcbCatalogEnrollment> {
   const userAgent = options.userAgent ?? DEFAULT_USER_AGENT;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const doFetch = options.fetch ?? globalThis.fetch;
 
   const readText = async (response: Response): Promise<string> => {
     // Headers can succeed while the body stalls; bound the full read.
@@ -452,7 +455,7 @@ export async function fetchUcbCatalogEnrollment(
 
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await doFetch(url, {
       headers: {
         Accept: "text/html,application/xhtml+xml",
         "User-Agent": userAgent,
@@ -486,7 +489,7 @@ export async function fetchUcbCatalogEnrollment(
   const associatedUrl = new URL(`/sections/associated/${nodeId}`, url);
   let associatedSections: ParsedUcbEnrollment[] = [];
   try {
-    const associatedResponse = await fetch(associatedUrl, {
+    const associatedResponse = await doFetch(associatedUrl, {
       headers: {
         Accept: "text/html,application/xhtml+xml",
         "User-Agent": userAgent,

@@ -341,7 +341,10 @@ const matchAssociatedScrapedEnrollment = (
   return undefined;
 };
 
-const scrapeEnrollmentForSection = async (section: ISectionItem) => {
+const scrapeEnrollmentForSection = async (
+  section: ISectionItem,
+  redis: RedisClientType
+) => {
   if (!section.component) return null;
   const url = buildUcbCatalogUrl({
     year: section.year,
@@ -352,7 +355,7 @@ const scrapeEnrollmentForSection = async (section: ISectionItem) => {
     component: section.component,
   });
   try {
-    const scraped = await fetchUcbCatalogEnrollment(url);
+    const scraped = await fetchUcbCatalogEnrollment(url, redis);
     if (isBlankUcbEnrollment(scraped.primary)) return null;
     return scraped;
   } catch {
@@ -434,7 +437,7 @@ export const refreshClassEnrollment = async (
 
   let scrapedCatalog = null;
   for (const candidate of scrapeCandidates) {
-    scrapedCatalog = await scrapeEnrollmentForSection(candidate);
+    scrapedCatalog = await scrapeEnrollmentForSection(candidate, redis);
     if (scrapedCatalog) break;
   }
 

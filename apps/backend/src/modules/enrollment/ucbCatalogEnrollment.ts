@@ -1,3 +1,4 @@
+import type { RedisClientType } from "redis";
 import { GraphQLError } from "graphql";
 
 import {
@@ -11,6 +12,9 @@ import {
   preserveRemovedSeatReservationCounts as sharedPreserveRemovedSeatReservationCounts,
 } from "@repo/shared";
 
+import { createRequestQueue } from "../../utils/requestQueue";
+import { waitForUcbCatalogSlot } from "../../utils/ucbCatalogRateLimit";
+
 export type {
   ParsedUcbCatalogEnrollment,
   ParsedUcbEnrollment,
@@ -22,6 +26,15 @@ export const mergeSeatReservationTypes = sharedMergeSeatReservationTypes;
 export const seatReservationCountsEqual = sharedSeatReservationCountsEqual;
 export const preserveRemovedSeatReservationCounts =
   sharedPreserveRemovedSeatReservationCounts;
+
+/** Cap outbound traffic to classes.berkeley.edu at 1 request / 3s. */
+const UCB_CATALOG_MIN_INTERVAL_MS = 3000;
+
+/**
+ * Local FIFO so concurrent GraphQL handlers on this process wait in line
+ * before competing for the Redis slot (avoids thundering-herd sleep loops).
+ */
+const enqueueLocally = createRequestQueue(0);
 
 function mapUcbError(error: unknown): never {
   if (error instanceof UcbCatalogEnrollmentError) {
@@ -38,11 +51,24 @@ function mapUcbError(error: unknown): never {
   );
 }
 
+function createRateLimitedFetch(
+  redis: RedisClientType
+): typeof globalThis.fetch {
+  return (input, init) =>
+    enqueueLocally(async () => {
+      await waitForUcbCatalogSlot(redis, UCB_CATALOG_MIN_INTERVAL_MS);
+      return globalThis.fetch(input, init);
+    });
+}
+
 export async function fetchUcbCatalogEnrollment(
-  url: string
+  url: string,
+  redis: RedisClientType
 ): Promise<ParsedUcbCatalogEnrollment> {
   try {
-    return await sharedFetchUcbCatalogEnrollment(url);
+    return await sharedFetchUcbCatalogEnrollment(url, {
+      fetch: createRateLimitedFetch(redis),
+    });
   } catch (error) {
     mapUcbError(error);
   }
