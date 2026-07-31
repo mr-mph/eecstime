@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 
-import { MemberCard } from "../About/MemberCard";
+import { MemberCard } from "./MemberCard";
 import styles from "./Alumni.module.scss";
 
 // Sample alumni data - in production, this would come from GraphQL

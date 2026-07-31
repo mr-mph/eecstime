@@ -4,7 +4,6 @@ import { ArrowRight, Calendar, Plus } from "iconoir-react";
 
 import { Box, Button, Container, Flex } from "@repo/theme";
 
-import Footer from "@/components/Footer";
 import ScheduleCard from "@/components/ScheduleCard";
 import { useReadSchedules, useReadTerms } from "@/hooks/api";
 import useUser from "@/hooks/useUser";
@@ -172,7 +171,6 @@ export default function Schedules() {
             })}
         </Flex>
       </Container>
-      <Footer />
     </Box>
   );
 }

@@ -11,7 +11,6 @@ import {
   LoadingIndicator,
 } from "@repo/theme";
 
-import Footer from "@/components/Footer";
 import { useReadPlans } from "@/hooks/api";
 import useUser from "@/hooks/useUser";
 import { signIn } from "@/lib/api";
@@ -84,7 +83,6 @@ export default function GradTrakIndex() {
           )}
         </div>
       </Container>
-      <Footer />
     </Box>
   );
 }

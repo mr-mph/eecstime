@@ -2,84 +2,6 @@
   padding: 0 40px;
 }
 
-.root {
-  padding: 64px 0;
-  display: flex;
-  flex-wrap: wrap;
-  border-top: 1px solid var(--border-color);
-  gap: 64px;
-
-  .columns {
-    display: flex;
-    gap: 64px;
-  }
-
-  @media (max-width: 768px) {
-    gap: 48px;
-
-    .columns {
-      width: 100%;
-      gap: 48px;
-    }
-  }
-
-  .column {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-
-    .label {
-      font-size: var(--text-14);
-      font-weight: var(--font-medium);
-      color: var(--heading-color);
-    }
-
-    .link {
-      font-size: var(--text-14);
-      font-weight: var(--font-normal);
-      color: var(--paragraph-color);
-      transition: all 100ms ease-in-out;
-      white-space: nowrap;
-
-      &:hover {
-        color: var(--heading-color);
-      }
-    }
-  }
-
-  .group {
-    flex-grow: 1;
-    min-width: 200px;
-
-    .brandGroup {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-
-    .description {
-      font-size: var(--text-14);
-      font-weight: var(--font-normal);
-      color: var(--paragraph-color);
-      white-space: nowrap;
-    }
-
-    .brand {
-      font-size: 24px;
-      font-weight: 580;
-      font-feature-settings:
-        "cv05" on,
-        "cv13" on,
-        "ss07" on,
-        "cv12" on,
-        "cv06" on;
-      color: var(--heading-color);
-      cursor: pointer;
-      transition: all 100ms ease-in-out;
-    }
-  }
-}
-
 .bottom {
   display: flex;
   justify-content: space-between;
@@ -87,42 +9,5 @@
   padding: 24px 0;
   font-size: var(--text-14);
   color: var(--paragraph-color);
-}
-
-.statusBadge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 16px;
-  height: 32px;
-  padding: 0 10px;
-  width: fit-content;
-  background-color: var(--button-hover-color);
-  border-radius: 8px;
-  font-size: var(--text-14);
-  font-weight: var(--font-medium);
-  color: var(--paragraph-color);
-  text-decoration: none;
-  transition: all 100ms ease-in-out;
-  white-space: nowrap;
-
-  &:hover {
-    color: var(--heading-color);
-  }
-
-  .statusDot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
-    background-color: var(--green-500);
-  }
-
-  &[data-status="HASISSUES"] .statusDot {
-    background-color: var(--yellow-500);
-  }
-
-  &[data-status="UNDERMAINTENANCE"] .statusDot {
-    background-color: var(--blue-500);
-  }
+  border-top: 1px solid var(--border-color);
 }

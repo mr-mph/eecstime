@@ -37,7 +37,6 @@ const LegacyEnrollment = lazy(() => import("@/app/_legacy/Enrollment"));
 const LegacyGradeDistributions = lazy(
   () => import("@/app/_legacy/GradeDistributions")
 );
-const About = lazy(() => import("@/app/About"));
 const Dorms = lazy(() => import("@/app/Dorms"));
 const DormRoom = lazy(() => import("@/app/Dorms/RoomViewer"));
 // const Discover = lazy(() => import("@/app/Discover"));
@@ -120,7 +119,7 @@ const router = createBrowserRouter([
       },
       {
         path: "gradtrak",
-        element: <Layout footer={false} />,
+        element: <Layout />,
         children: [
           {
             index: true,
@@ -168,14 +167,6 @@ const router = createBrowserRouter([
             element: (
               <SuspenseBoundary key="dorms">
                 <Dorms />
-              </SuspenseBoundary>
-            ),
-          },
-          {
-            path: "about",
-            element: (
-              <SuspenseBoundary key="about">
-                <About />
               </SuspenseBoundary>
             ),
           },
@@ -253,7 +244,7 @@ const router = createBrowserRouter([
         ],
       },
       {
-        element: <Layout footer={false} />,
+        element: <Layout />,
         children: [
           {
             element: (
