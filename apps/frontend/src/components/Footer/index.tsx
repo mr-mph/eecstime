@@ -69,7 +69,7 @@ export default function Footer() {
         <div className={styles.group}>
           <div className={styles.brandGroup}>
             <Link to="/" className={styles.brand}>
-              Berkeleytime
+              EECStime
             </Link>
             <p className={styles.description}>An ASUC OCTO project</p>
             <StatusBadge />
@@ -139,7 +139,7 @@ export default function Footer() {
         </div>
       </div>
       <div className={styles.bottom}>
-        <span>© {new Date().getFullYear()}, Berkeleytime.</span>
+        <span>© {new Date().getFullYear()}, EECStime.</span>
         <ThemeSwitcher />
       </div>
     </Container>

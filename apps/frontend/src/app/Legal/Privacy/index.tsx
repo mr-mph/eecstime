@@ -67,7 +67,7 @@ export default function Privacy() {
               <p className={styles.listItemContent}>
                 <strong>Company</strong> (referred to as either &quot;the
                 Company&quot;, &quot;We&quot;, &quot;Us&quot; or &quot;Our&quot;
-                in this Agreement) refers to Berkeleytime.
+                in this Agreement) refers to EECStime.
               </p>
             </li>
             <li>
@@ -121,7 +121,7 @@ export default function Privacy() {
             </li>
             <li>
               <p className={styles.listItemContent}>
-                <strong>Website</strong> refers to Berkeleytime, accessible from{" "}
+                <strong>Website</strong> refers to EECStime, accessible from{" "}
                 <a
                   href="https://berkeleytime.com"
                   rel="external nofollow noopener"

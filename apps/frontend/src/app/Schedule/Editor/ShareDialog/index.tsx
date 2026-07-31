@@ -34,7 +34,7 @@ export default function ShareDialog({ children }: ShareDialogProps) {
     () => ({
       url: window.location.href,
       title: schedule.name,
-      text: `View my ${schedule.semester} ${schedule.year} schedule on Berkeleytime`,
+      text: `View my ${schedule.semester} ${schedule.year} schedule on EECStime`,
     }),
     [schedule]
   );

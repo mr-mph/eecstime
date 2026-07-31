@@ -57,7 +57,7 @@ const generateICS = (schedule: ISchedule) => {
   const icsContent = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//BerkeleyTime//Schedule Export//EN",
+    "PRODID:-//EECStime//Schedule Export//EN",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
     "BEGIN:VTIMEZONE",

@@ -14,7 +14,7 @@ export default function BetaBanner() {
   return (
     <div className={styles.root}>
       <p className={styles.text}>
-        You are viewing the <i>new</i> release of Berkeleytime.
+        You are viewing the <i>new</i> release of EECStime.
       </p>
       <div className={styles.actions}>
         <a

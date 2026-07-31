@@ -69,7 +69,7 @@ export default function Schedules() {
       <Container style={{ marginBottom: "80px" }}>
         <div className={styles.header}>
           <div className={styles.title}>
-            Welcome to Berkeleytime&apos;s Scheduler
+            Welcome to EECStime&apos;s Scheduler
           </div>
           <div className={styles.prompt}>
             Use our scheduler to build your ideal schedule. Search our catalog

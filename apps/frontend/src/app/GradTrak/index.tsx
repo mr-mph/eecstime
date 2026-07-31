@@ -63,7 +63,7 @@ export default function GradTrakIndex() {
     <Box p="5">
       <Container style={{ marginBottom: "80px" }}>
         <div className={styles.header}>
-          <div className={styles.title}>Welcome to Berkeleytime's GradTrak</div>
+          <div className={styles.title}>Welcome to EECStime's GradTrak</div>
           <div className={styles.prompt}>
             Use our GradTrak to build your ideal 4-year plan. Find courses,
             track requirements, and visualize your academic journey.

@@ -23,7 +23,7 @@ export default function Organization() {
           <p className={styles.aboutText}>
             We're a small group of student volunteers at UC Berkeley, dedicated
             to simplifying the course discovery experience. We actively build,
-            improve and maintain Berkeleytime.
+            improve and maintain EECStime.
           </p>
           <Button
             as={Link}
@@ -40,7 +40,7 @@ export default function Organization() {
           <div className={styles.getInvolvedTitle}>
             <h2 className={styles.heading}>Sponsors</h2>
             <p className={styles.description}>
-              Thank you to the folks that help the Berkeleytime team continue to
+              Thank you to the folks that help the EECStime team continue to
               provide this service free-of-charge to students!
             </p>
           </div>
@@ -108,7 +108,7 @@ export default function Organization() {
           <div className={styles.getInvolvedTitle}>
             <h2 className={styles.heading}>Get Involved</h2>
             <p className={styles.description}>
-              Over 20,000 students use Berkeleytime every semester. Help us make
+              Over 20,000 students use EECStime every semester. Help us make
               course planning a little easier for everyone.
             </p>
           </div>
@@ -124,7 +124,7 @@ export default function Organization() {
             <AccordionItem value="contribute">
               <AccordionTrigger>Contribute Code</AccordionTrigger>
               <AccordionContent>
-                Berkeleytime is a completely open-source project. Check out our
+                EECStime is a completely open-source project. Check out our
                 repository and contribute at{" "}
                 <a href="https://github.com/asuc-octo/berkeleytime">
                   github.com/asuc-octo/berkeleytime

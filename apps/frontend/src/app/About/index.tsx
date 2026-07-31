@@ -569,7 +569,7 @@ export default function About() {
         <p className={styles.aboutDescription}>
           We're a small group of student volunteers at UC Berkeley, dedicated to
           simplifying the course discovery experience. We actively build,
-          improve and maintain Berkeleytime.
+          improve and maintain EECStime.
         </p>
         <div className={styles.carouselContainer}>
           <div className={styles.carousel}>
@@ -674,7 +674,7 @@ export default function About() {
             <h3 className={styles.valueTitle}>Passion</h3>
             <p className={styles.valueDescription}>
               Genuine commitment and dedication are critical to moving the
-              Berkeleytime product forward.
+              EECStime product forward.
             </p>
           </div>
         </div>

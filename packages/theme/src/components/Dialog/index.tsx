@@ -36,7 +36,7 @@ function Content({ className, style, ...props }: Primitive.DialogContentProps) {
       {/* https://github.com/radix-ui/themes/issues/135 */}
       <Theme>
         <Dialog.Title style={{ display: "none" }}>
-          {props.title ?? "Berkeleytime Dialog"}
+          {props.title ?? "EECStime Dialog"}
         </Dialog.Title>
         <Primitive.Content
           {...props}
