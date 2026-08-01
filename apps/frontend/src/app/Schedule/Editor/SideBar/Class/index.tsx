@@ -136,9 +136,11 @@ export default function Class({
   onComponentLockChange,
 }: ClassProps) {
   const groups = useMemo(() => {
-    const sortedSections = _class.sections.toSorted((a, b) =>
-      a.number.localeCompare(b.number)
-    );
+    const sortedSections = _class.sections.toSorted((a, b) => {
+      if (a.number === "999") return -1;
+      if (b.number === "999") return 1;
+      return a.number.localeCompare(b.number, undefined, { numeric: true });
+    });
 
     return Object.groupBy(sortedSections, (section) => section.component);
   }, [_class]);
@@ -147,9 +149,11 @@ export default function Class({
   const primarySections = useMemo(() => {
     if (!_class.primarySection) return [];
     const siblings = _class.siblingPrimarySections ?? [];
-    return [_class.primarySection, ...siblings].toSorted((a, b) =>
-      a.number.localeCompare(b.number)
-    );
+    return [_class.primarySection, ...siblings].toSorted((a, b) => {
+      if (a.number === "999") return -1;
+      if (b.number === "999") return 1;
+      return a.number.localeCompare(b.number, undefined, { numeric: true });
+    });
   }, [_class.primarySection, _class.siblingPrimarySections]);
 
   // Helper to count sections for a component (including primary + sibling lectures)

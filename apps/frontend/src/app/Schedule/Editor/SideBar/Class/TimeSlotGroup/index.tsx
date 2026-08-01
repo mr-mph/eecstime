@@ -224,26 +224,42 @@ export function getSectionMeetingKey(section: GroupableSection): string {
 }
 
 /**
- * Meeting `days` are Sunday-first: [Su, M, Tu, W, Th, F, Sa].
- * Return Monday-first rank of the earliest meeting day (Mon=0 … Sun=6),
+ * Meeting `days` are Monday-first: [M, Tu, W, Th, F, Sa, Su].
+ * Return rank of the earliest meeting day (Mon=0 … Sun=6),
  * or Infinity when no days are set.
  */
 function getEarliestDayRank(
   days: (boolean | null)[] | null | undefined
 ): number {
   if (!days?.length) return Infinity;
-  // Walk Mon→Sun against the Sunday-first array.
-  const mondayFirstIndices = [1, 2, 3, 4, 5, 6, 0];
-  for (let rank = 0; rank < mondayFirstIndices.length; rank++) {
-    if (days[mondayFirstIndices[rank]]) return rank;
+  for (let i = 0; i < days.length; i++) {
+    if (days[i]) return i;
   }
   return Infinity;
+}
+
+function groupHasSection999(sections: GroupableSection[]): boolean {
+  return sections.some((section) => section.number === "999");
+}
+
+function compareSectionsInGroup(
+  a: GroupableSection,
+  b: GroupableSection
+): number {
+  if (a.number === "999") return -1;
+  if (b.number === "999") return 1;
+  return a.number.localeCompare(b.number, undefined, { numeric: true });
 }
 
 function compareGroupsChronologically(
   a: GroupableSection[],
   b: GroupableSection[]
 ): number {
+  // Section 999 (often arrange/TBD) always sorts first.
+  const a999 = groupHasSection999(a);
+  const b999 = groupHasSection999(b);
+  if (a999 !== b999) return a999 ? -1 : 1;
+
   const meetingA = getPrimaryMeeting(a[0]);
   const meetingB = getPrimaryMeeting(b[0]);
 
@@ -286,5 +302,7 @@ export function groupSectionsByMeetingTime(
     if (existing) existing.push(section);
     else groups.set(key, [section]);
   }
-  return [...groups.values()].sort(compareGroupsChronologically);
+  return [...groups.values()]
+    .map((group) => [...group].sort(compareSectionsInGroup))
+    .sort(compareGroupsChronologically);
 }
