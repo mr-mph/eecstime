@@ -223,6 +223,23 @@ export function getSectionMeetingKey(section: GroupableSection): string {
   return `${daysKey}|${meeting.startTime ?? ""}|${meeting.endTime ?? ""}`;
 }
 
+/**
+ * Meeting `days` are Sunday-first: [Su, M, Tu, W, Th, F, Sa].
+ * Return Monday-first rank of the earliest meeting day (Mon=0 … Sun=6),
+ * or Infinity when no days are set.
+ */
+function getEarliestDayRank(
+  days: (boolean | null)[] | null | undefined
+): number {
+  if (!days?.length) return Infinity;
+  // Walk Mon→Sun against the Sunday-first array.
+  const mondayFirstIndices = [1, 2, 3, 4, 5, 6, 0];
+  for (let rank = 0; rank < mondayFirstIndices.length; rank++) {
+    if (days[mondayFirstIndices[rank]]) return rank;
+  }
+  return Infinity;
+}
+
 function compareGroupsChronologically(
   a: GroupableSection[],
   b: GroupableSection[]
@@ -237,6 +254,10 @@ function compareGroupsChronologically(
   if (!startA && !startB) return 0;
   if (!startA) return 1;
   if (!startB) return -1;
+
+  const dayDiff =
+    getEarliestDayRank(meetingA?.days) - getEarliestDayRank(meetingB?.days);
+  if (dayDiff !== 0) return dayDiff;
 
   const startDiff = parseTime(startA) - parseTime(startB);
   if (startDiff !== 0) return startDiff;
