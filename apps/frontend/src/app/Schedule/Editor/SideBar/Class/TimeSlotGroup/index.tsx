@@ -239,15 +239,16 @@ function getEarliestDayRank(
 }
 
 function groupHasSection999(sections: GroupableSection[]): boolean {
-  return sections.some((section) => section.number === "999");
+  return sections.some((section) => section.number.includes("999"));
 }
 
 function compareSectionsInGroup(
   a: GroupableSection,
   b: GroupableSection
 ): number {
-  if (a.number === "999") return -1;
-  if (b.number === "999") return 1;
+  const a999 = a.number.includes("999");
+  const b999 = b.number.includes("999");
+  if (a999 !== b999) return a999 ? -1 : 1;
   return a.number.localeCompare(b.number, undefined, { numeric: true });
 }
 
@@ -255,7 +256,7 @@ function compareGroupsChronologically(
   a: GroupableSection[],
   b: GroupableSection[]
 ): number {
-  // Section 999 (often arrange/TBD) always sorts first.
+  // Sections with 999 in the number (999, 999L, etc.) always sort first.
   const a999 = groupHasSection999(a);
   const b999 = groupHasSection999(b);
   if (a999 !== b999) return a999 ? -1 : 1;

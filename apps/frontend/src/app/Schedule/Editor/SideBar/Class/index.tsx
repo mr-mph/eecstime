@@ -137,8 +137,9 @@ export default function Class({
 }: ClassProps) {
   const groups = useMemo(() => {
     const sortedSections = _class.sections.toSorted((a, b) => {
-      if (a.number === "999") return -1;
-      if (b.number === "999") return 1;
+      const a999 = a.number.includes("999");
+      const b999 = b.number.includes("999");
+      if (a999 !== b999) return a999 ? -1 : 1;
       return a.number.localeCompare(b.number, undefined, { numeric: true });
     });
 
@@ -150,8 +151,9 @@ export default function Class({
     if (!_class.primarySection) return [];
     const siblings = _class.siblingPrimarySections ?? [];
     return [_class.primarySection, ...siblings].toSorted((a, b) => {
-      if (a.number === "999") return -1;
-      if (b.number === "999") return 1;
+      const a999 = a.number.includes("999");
+      const b999 = b.number.includes("999");
+      if (a999 !== b999) return a999 ? -1 : 1;
       return a.number.localeCompare(b.number, undefined, { numeric: true });
     });
   }, [_class.primarySection, _class.siblingPrimarySections]);
