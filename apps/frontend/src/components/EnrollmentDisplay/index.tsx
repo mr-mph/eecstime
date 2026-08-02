@@ -14,6 +14,8 @@ interface EnrollmentDisplayProps {
   waitlistedCount?: number;
   maxWaitlist?: number;
   time?: string;
+  /** Whether the counts apply to a class or a specific section. */
+  scope?: "class" | "section";
   children?: (content: ReactNode) => ReactNode;
 }
 
@@ -23,6 +25,7 @@ export default function EnrollmentDisplay({
   waitlistedCount,
   maxWaitlist,
   time,
+  scope = "class",
   children,
 }: EnrollmentDisplayProps) {
   const formattedTime = useMemo(() => {
@@ -47,13 +50,13 @@ export default function EnrollmentDisplay({
           {percentage}% enrolled{hasWaitlist && ` (${waitlistedCount} wl.)`}
         </span>
       }
-      title="Enrollment"
+      title={scope === "section" ? "Section enrollment" : "Enrollment"}
       description={
         <>
           <span style={{ color }}>
             {enrolledCount}/{maxEnroll}
           </span>{" "}
-          students are enrolled in this class for this semester.
+          students are enrolled in this {scope} for this semester.
           {hasWaitlist && (
             <>
               {" "}

@@ -27,7 +27,7 @@ export const getEnrollmentHoverLabel = (
   if (typeof enrolledCount !== "number" || typeof maxEnroll !== "number")
     return null;
 
-  const base = `${enrolledCount}/${maxEnroll}`;
+  const base = `Section enrollment: ${enrolledCount}/${maxEnroll}`;
   if (typeof waitlistedCount === "number" && waitlistedCount > 0)
     return `${base} (${waitlistedCount} wl)`;
   return base;

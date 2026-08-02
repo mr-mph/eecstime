@@ -311,6 +311,7 @@ export default function Sections() {
                             waitlistedCount={waitlistedCount}
                             maxWaitlist={maxWaitlist}
                             time={enrollmentTime}
+                            scope="section"
                           />
                         ) : (
                           NO_DATA_LABEL

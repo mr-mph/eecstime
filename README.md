@@ -3,6 +3,7 @@
 EECStime is a modified version of [Berkeleytime](https://github.com/asuc-octo/berkeleytime) that improves course discovery, enrollment planning, scheduling, and more for UC Berkeley students.
 
 ## Modifications
+
 ### Searching:
 
 - filter courses by eecs h/ss or ethics requirements
@@ -20,7 +21,8 @@ EECStime is a modified version of [Berkeleytime](https://github.com/asuc-octo/be
 - see ASSIST transfer equivalents at community colleges
 - see how many seats are reserved for your major/year
 - see final exam time and date
-- get live enrollment info with refresh button
+- see # of students enrolled in each section on hover
+- fetch live enrollment data with refresh button
 
 ### Scheduler:
 
