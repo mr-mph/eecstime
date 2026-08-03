@@ -33,9 +33,9 @@ EECStime is a modified version of [Berkeleytime](https://github.com/asuc-octo/be
 
 ### Miscellaneous:
 
-- allow seeing # of grades for each bar rather than just percent
+- allow seeing # of grades for each bar rather than just percent on grades tab
 - fill out your year/college/major to see what reserved seats groups you qualify for and save them to your profile
-- new 3d dorms feature allowing you to experiment with your dorm ahead of move-in day
+- 3d dorms visualizer for units & blackwell to see dorm dimensions ahead of move-in day
 
 ### Bug Fixes:
 
@@ -54,7 +54,3 @@ EECStime is a modified version of [Berkeleytime](https://github.com/asuc-octo/be
 A course discovery and planning tool which combines all of UC Berkeley's academic information in one place. We intend to make it a more accurate and powerful tool than anything students currently use.
 
 Berkeleytime was created by [Yuxin Zhu](http://yuxinzhu.com/) and [Noah Gilmore](https://noahgilmore.com) and is maintained by [the ASUC Office of the CTO](https://octo.asuc.org/).
-
-# Getting started
-
-Follow the instructions on the [Getting Started page of the docs](https://docs.berkeleytime.com/getting-started/local-development.html) to setup!
