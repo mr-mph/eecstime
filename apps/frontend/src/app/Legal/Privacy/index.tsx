@@ -123,12 +123,12 @@ export default function Privacy() {
               <p className={styles.listItemContent}>
                 <strong>Website</strong> refers to EECStime, accessible from{" "}
                 <a
-                  href="https://berkeleytime.com"
+                  href="https://eecstime.sethw.dev"
                   rel="external nofollow noopener"
                   target="_blank"
                   className={styles.link}
                 >
-                  https://berkeleytime.com
+                  https://eecstime.sethw.dev
                 </a>
               </p>
             </li>

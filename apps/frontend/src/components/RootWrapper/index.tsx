@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { Outlet, ScrollRestoration, useLocation } from "react-router-dom";
 
 import DevAuthBanner from "@/components/DevAuthBanner";
+import DocumentMeta from "@/components/DocumentMeta";
 import RouteTracker from "@/components/RouteTracker";
 import {
   useAllRouteRedirects,
@@ -52,6 +53,7 @@ export default function RootWrapper() {
 
   return (
     <>
+      <DocumentMeta />
       <RouteTracker />
       {isDevAuthUiEnabled() && <DevAuthBanner />}
       <ScrollRestoration />

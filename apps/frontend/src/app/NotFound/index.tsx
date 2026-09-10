@@ -32,7 +32,7 @@ export default function NotFound() {
         <p className={styles.description}>
           Oops! There is nothing here. Check the{" "}
           <a
-            href="https://berkeleytime.com/catalog"
+            href="/catalog"
             style={{ color: "var(--blue-500)" }}
           >
             catalog

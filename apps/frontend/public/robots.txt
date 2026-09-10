@@ -1,0 +1,12 @@
+User-agent: *
+Allow: /
+
+Disallow: /profile
+Disallow: /schedules/
+Disallow: /collection/
+Disallow: /gradtrak/onboarding
+Disallow: /gradtrak/dashboard
+Disallow: /grades-legacy
+Disallow: /enrollment-legacy
+
+Sitemap: https://eecstime.sethw.dev/sitemap.xml

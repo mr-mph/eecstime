@@ -1,4 +1,4 @@
-# [Berkeleytime Frontend](http://berkeleytime.com/)
+# [EECStime Frontend](https://eecstime.sethw.dev/)
 
 # Structure
 

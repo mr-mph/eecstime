@@ -10,24 +10,13 @@ export default function Organization() {
           <h2 className={styles.aboutTitle}>About EECStime</h2>
           <p className={styles.aboutText}>
             <a
-              href="https://github.com/mr-mph/eecstime"
-              target="_blank"
-              rel="noopener noreferrer"
+              href="https://eecstime.sethw.dev"
               className={styles.inlineLink}
             >
               EECStime
             </a>{" "}
-            is a modified version of{" "}
-            <a
-              href="https://berkeleytime.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className={styles.inlineLink}
-            >
-              Berkeleytime
-            </a>{" "}
-            that improves course discovery, enrollment planning, scheduling, and
-            more.
+            is a modified version of Berkeleytime that improves course
+            discovery, enrollment planning, scheduling, and more.
           </p>
         </div>
       </Container>
