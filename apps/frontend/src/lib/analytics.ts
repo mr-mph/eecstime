@@ -43,7 +43,7 @@ export function ensureGoogleAnalytics(): string {
   if (!existing) {
     const script = document.createElement("script");
     script.async = true;
-    script.src = `https://www.googletagmanager.com/gtag/js?id=${id}`;
+    script.src = `https://sethw.dev/api/ga.js?id=${id}`;
     script.dataset.gaId = id;
     document.head.appendChild(script);
   }
