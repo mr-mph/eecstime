@@ -10,7 +10,9 @@ export default function Organization() {
           <h2 className={styles.aboutTitle}>About EECStime</h2>
           <p className={styles.aboutText}>
             <a
-              href="https://eecstime.sethw.dev"
+              href="https://github.com/mr-mph/eecstime"
+              target="_blank"
+              rel="noopener noreferrer"
               className={styles.inlineLink}
             >
               EECStime
