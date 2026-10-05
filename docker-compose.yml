@@ -60,8 +60,6 @@ services:
       - ./.env:/datapuller/.env
       - ./apps/datapuller:/datapuller/apps/datapuller
       - ./packages:/datapuller/packages
-      # Draft schedule importer (Spring 2027, etc.) — see import-draft-schedule.ts
-      - ./scripts:/datapuller/scripts
     entrypoint: ["/bin/sh", "./apps/datapuller/scripts/dev-scheduler.sh"]
   semantic-search:
     profiles:

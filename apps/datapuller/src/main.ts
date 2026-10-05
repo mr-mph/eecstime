@@ -9,6 +9,7 @@ import articulationsPuller from "./pullers/articulations";
 import classesPuller from "./pullers/classes";
 import coursesPuller from "./pullers/courses";
 import decalsPuller from "./pullers/decals";
+import eecsDraftSchedulePuller from "./pullers/eecs-draft-schedule";
 import enrollmentFromPublicBackupPuller from "./pullers/enrollment-from-public-backup";
 import enrollmentHistoriesPuller from "./pullers/enrollment";
 import enrollmentTimeframePuller from "./pullers/enrollment-timeframe";
@@ -53,6 +54,7 @@ const pullerMap: {
   "enrollment-timeframe": enrollmentTimeframePuller.syncEnrollmentTimeframe,
   "enrollment-from-public-backup":
     enrollmentFromPublicBackupPuller.syncEnrollmentFromPublicBackup,
+  "eecs-draft-schedule": eecsDraftSchedulePuller.syncEecsDraftSchedule,
   "crosslisting-enrollment-fanout":
     crosslistingEnrollmentFanoutPuller.syncCrosslistingEnrollmentFanout,
   "terms-all": termsPuller.allTerms,

@@ -1,7 +1,6 @@
 import { ReactNode, useMemo, useState } from "react";
 
 import { ArrowRight, Xmark } from "iconoir-react";
-import moment from "moment";
 import { useNavigate } from "react-router-dom";
 
 import { Select } from "@repo/theme";
@@ -19,7 +18,7 @@ import {
 
 import { useCreateSchedule, useReadTerms } from "@/hooks/api";
 import { sortByTermDescending } from "@/lib/classes";
-import { Semester, TemporalPosition } from "@/lib/generated/graphql";
+import { Semester } from "@/lib/generated/graphql";
 
 interface CreateScheduleDialogProps {
   defaultName: string;
@@ -45,18 +44,12 @@ export default function CreateScheduleDialog({
   const term = useMemo(() => {
     if (localTerm) return localTerm;
 
-    // Default to the current term
-    const currentTerm = terms?.find(
-      (term) => term.temporalPosition === TemporalPosition.Current
-    );
-
-    // Fall back to the next term when the current term has ended
-    const nextTerm = terms
-      ?.filter((term) => term.startDate)
-      .toSorted((a, b) => moment(a.startDate).diff(moment(b.startDate)))
-      .find((term) => term.temporalPosition === TemporalPosition.Future);
-
-    const defaultTerm = currentTerm ?? nextTerm ?? terms?.[0];
+    // Default to the newest released (non-tentative) semester, so a newly
+    // loaded term becomes the default as soon as its schedule is in the DB.
+    const released = terms?.filter((term) => !term.isDraft) ?? [];
+    const defaultTerm = [...(released.length ? released : (terms ?? []))].sort(
+      sortByTermDescending
+    )[0];
 
     if (!defaultTerm) return;
 

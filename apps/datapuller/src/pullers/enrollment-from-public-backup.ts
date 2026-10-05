@@ -18,6 +18,7 @@ import {
   reapplyEecsTimeProtectedData,
   snapshotEecsTimeProtectedData,
 } from "../lib/eecsTimeUserBackup";
+import { syncDraftSchedules } from "../lib/draft-schedule";
 import { syncCrosslistingEnrollmentFanout } from "./crosslisting-enrollment-fanout";
 import { rebuildCourseGradeSummaries } from "./grade-distributions";
 
@@ -46,9 +47,9 @@ const BACKUP_LOOKBACK_DAYS = 3;
  * without going through the protection path (snapshot only covers
  * `eecsTimeUser: true` rows).
  *
- * Spring 2027 draft schedule is NOT excluded here (it lives in shared
- * classes/sections/terms/catalog_classes). Instead we re-seed it from
- * scripts/data/spring-2027-draft.json after every successful merge.
+ * Tentative EECS terms are NOT excluded here (they live in shared
+ * classes/sections/terms/catalog_classes). Instead we re-seed them from the
+ * stored EECS draft scrape after every successful merge.
  */
 const NS_EXCLUDE = [
   // Ops / analytics — keep local
@@ -65,6 +66,7 @@ const NS_EXCLUDE = [
   "bt.articulations",
   // Local job bookkeeping
   "bt.enrollment_backup_sync_statuses",
+  "bt.draft_schedule_snapshots",
   "bt.ucb_enrollment_scrape_statuses",
   // Auth / schedule identity — not migrated from public dump; protect local
   "bt.users",
@@ -77,10 +79,6 @@ const NS_EXCLUDE = [
  * Always snapshot/restore these after any --drop restore (not user-migrated).
  */
 const LOCAL_OWNED_COLLECTIONS = ["rmp_professors", "articulations"] as const;
-
-/** Idempotent draft importer mounted into the datapuller container. */
-const DRAFT_SCHEDULE_IMPORT_SCRIPT =
-  "/datapuller/scripts/import-draft-schedule.ts";
 
 const SYNC_STATUS_KEY = "public-backup-sync";
 const SYNC_LOCK_PATH = "/tmp/enrollment-from-public-backup.lock";
@@ -273,63 +271,18 @@ const restoreLocalOwnedSnapshots = async (
 };
 
 /**
- * Re-seed the Spring 2027 draft schedule after a public backup merge.
- * Draft rows live in shared catalog collections that --drop replaces, so
- * exclude/snapshot can't preserve them — re-import from JSON instead.
- * Soft-fails (warn) so a missing term / importer hiccup doesn't block
- * enrollment restore.
+ * Re-seed tentative EECS terms after a public backup merge. Draft rows live in
+ * shared catalog collections that --drop replaces, so exclude/snapshot can't
+ * preserve them — re-apply from the stored EECS scrape instead. Terms whose
+ * full schedule is now in the backup are left alone (no draft). Soft-fails
+ * (warn) so a draft hiccup doesn't block enrollment restore.
  */
-const reseedDraftSchedule = async (
-  mongoUri: string,
-  log: Config["log"]
+const reseedDraftSchedules = async (
+  log: Config["log"],
+  options: { syncCatalog: boolean }
 ): Promise<boolean> => {
   try {
-    await access(DRAFT_SCHEDULE_IMPORT_SCRIPT);
-  } catch {
-    log.warn(
-      `Draft schedule importer not found at ${DRAFT_SCHEDULE_IMPORT_SCRIPT}; skipping reseed`
-    );
-    return false;
-  }
-
-  log.info("Re-seeding Spring 2027 draft schedule after public backup merge");
-  try {
-    const result = await new Promise<{ code: number; stderr: string }>(
-      (resolve, reject) => {
-        const child = spawn(
-          "npx",
-          ["tsx", DRAFT_SCHEDULE_IMPORT_SCRIPT],
-          {
-            env: { ...process.env, MONGODB_URI: mongoUri },
-            stdio: ["ignore", "pipe", "pipe"],
-          }
-        );
-        let stderr = "";
-        child.stderr.on("data", (chunk: Buffer) => {
-          const text = chunk.toString();
-          stderr += text;
-          for (const line of text.split("\n")) {
-            const trimmed = line.trim();
-            if (trimmed) log.info(trimmed);
-          }
-        });
-        child.stdout.on("data", (chunk: Buffer) => {
-          const line = chunk.toString().trim();
-          if (line) log.info(line);
-        });
-        child.on("error", reject);
-        child.on("close", (code) => {
-          resolve({ code: code ?? 1, stderr });
-        });
-      }
-    );
-
-    if (result.code !== 0) {
-      log.warn(
-        `Draft schedule reseed failed (backup merge still kept): ${result.stderr.trim() || `exit ${result.code}`}`
-      );
-      return false;
-    }
+    return await syncDraftSchedules(log, { refetch: false, ...options });
   } catch (error) {
     log.warn(
       `Draft schedule reseed failed (backup merge still kept): ${
@@ -338,12 +291,9 @@ const reseedDraftSchedule = async (
     );
     return false;
   }
-
-  log.info("Spring 2027 draft schedule reseeded");
-  return true;
 };
 
-const invalidateBackendCaches = async (
+export const invalidateBackendCaches = async (
   backendUrl: string,
   log: Config["log"]
 ) => {
@@ -492,9 +442,11 @@ const syncEnrollmentFromPublicBackupLocked = async (config: Config) => {
     status.lastEtag === etag
   ) {
     log.info(`Already merged backup ${dateKey} (etag match); skipping restore`);
-    // Still ensure draft Sp2027 exists — a prior merge may have dropped it
-    // before reseed was wired, or a manual wipe cleared it.
-    await reseedDraftSchedule(config.mongoDB.uri, log);
+    // Still ensure tentative terms exist (or get retired) — a manual wipe may
+    // have cleared them, or a real schedule may have landed.
+    if (await reseedDraftSchedules(log, { syncCatalog: true })) {
+      await invalidateBackendCaches(config.BACKEND_URL, log);
+    }
     return;
   }
 
@@ -503,7 +455,9 @@ const syncEnrollmentFromPublicBackupLocked = async (config: Config) => {
     log.info(
       `Newest available backup ${dateKey} is older than last merged ${status.lastBackupDate}; skipping`
     );
-    await reseedDraftSchedule(config.mongoDB.uri, log);
+    if (await reseedDraftSchedules(log, { syncCatalog: true })) {
+      await invalidateBackendCaches(config.BACKEND_URL, log);
+    }
     return;
   }
 
@@ -545,11 +499,11 @@ const syncEnrollmentFromPublicBackupLocked = async (config: Config) => {
       log
     );
 
-    // Draft Sp2027 lives in shared classes/sections/terms — re-seed from JSON.
-    const draftReseeded = await reseedDraftSchedule(
-      config.mongoDB.uri,
-      log
-    );
+    // Tentative EECS terms live in shared classes/sections/terms — re-seed.
+    // Catalog sort fields / enrollment are synced below for every term.
+    const draftReseeded = await reseedDraftSchedules(log, {
+      syncCatalog: false,
+    });
 
     // Backup catalog_classes often lack denormalized sort fields. Rebuild them
     // from source collections that are in the dump (grades, aggregated metrics)
@@ -574,7 +528,7 @@ const syncEnrollmentFromPublicBackupLocked = async (config: Config) => {
           lastBackupDate: dateKey,
           lastEtag: etag,
           lastRestoredAt: new Date(),
-          message: `Restored public backup ${dateKey} (--drop); protected ${eecsProtection.userIds.length} EECSTime user(s); migrated GradTrak/ratings/reviews for non-EECSTime users; ${draftReseeded ? "reseeded Spring 2027 draft; " : ""}synced catalog sort fields (grades, BT ratings, RMP) + enrollment`,
+          message: `Restored public backup ${dateKey} (--drop); protected ${eecsProtection.userIds.length} EECSTime user(s); migrated GradTrak/ratings/reviews for non-EECSTime users; ${draftReseeded ? "reseeded tentative EECS terms; " : ""}synced catalog sort fields (grades, BT ratings, RMP) + enrollment`,
         },
       },
       { upsert: true }

@@ -201,12 +201,12 @@ seed_database() {
   local datapuller_container_id
   datapuller_container_id="$($compose_cmd ps -q datapuller)"
   if [[ -n "$datapuller_container_id" ]]; then
-    log "Re-seeding Spring 2027 draft schedule (wiped by mongorestore --drop)..."
+    log "Loading tentative EECS terms (wiped by mongorestore --drop)..."
     if docker exec "$datapuller_container_id" sh -c \
-      'npx tsx /datapuller/scripts/import-draft-schedule.ts'; then
-      log "Spring 2027 draft schedule reseeded."
+      'cd /datapuller && turbo run main --filter=datapuller --env-mode=loose -- --puller=eecs-draft-schedule'; then
+      log "Tentative EECS terms up to date."
     else
-      warn "Draft schedule import failed (term may be missing from backup); continuing."
+      warn "EECS draft schedule sync failed; continuing."
     fi
     log "Syncing catalog enrollment (reserved seats, open counts) from restored backup..."
     docker exec "$datapuller_container_id" sh -c \
@@ -215,7 +215,7 @@ seed_database() {
     warn "Datapuller container not running; skipped draft reseed + catalog enrollment sync."
   fi
 
-  log "MongoDB restore complete (users/schedules preserved; GradTrak/ratings/reviews from public backup; Spring 2027 draft reseeded when possible)."
+  log "MongoDB restore complete (users/schedules preserved; GradTrak/ratings/reviews from public backup; tentative EECS terms reloaded when possible)."
 }
 
 parse_args() {
