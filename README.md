@@ -12,7 +12,7 @@ EECStime is a modified version of [Berkeleytime](https://github.com/asuc-octo/be
 - filter by if there are seats reserved for your major/year
 - filter by open seats for you specifically (non-reserved or reserved for you)
 - sort by A/A+ percent or # of ratings
-- search tentative eecs listings for upcoming semesters (auto-loaded daily from the eecs draft schedule until the full schedule is released)
+- search tentative eecs listings for upcoming semesters
 
 ### Course Listings:
 
