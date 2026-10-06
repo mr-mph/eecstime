@@ -56,6 +56,18 @@
     color: var(--secondary-color);
   }
 
+  .pastEnrollmentLink {
+    font-size: var(--text-14);
+    line-height: 1;
+    color: var(--blue-500);
+    white-space: nowrap;
+    text-decoration: none;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
   .reservedSeatingBadgeContainer {
     white-space: nowrap;
   }

@@ -28,12 +28,18 @@ import type { IEnrollment } from "@/lib/api/enrollment";
 import { sortByTermDescending } from "@/lib/classes";
 import {
   EnrollmentUrlInput,
+  enrollmentInputFromCandidate,
   getEnrollmentInputId,
   getEnrollmentInputSearchParam,
   isEnrollmentInputEqual,
+  listEnrollmentSectionCandidates,
   parseEnrollmentInputsFromUrl,
 } from "@/lib/enrollmentUrl";
-import { GetEnrollmentDocument, Semester } from "@/lib/generated/graphql";
+import {
+  GetCourseWithInstructorDocument,
+  GetEnrollmentDocument,
+  Semester,
+} from "@/lib/generated/graphql";
 import { RecentType, addRecent, getPageUrl, savePageUrl } from "@/lib/recent";
 
 import styles from "./Enrollment.module.scss";
@@ -164,6 +170,81 @@ const hasValidEnrollmentActivity = (
   });
 };
 
+const MAX_ENROLLMENT_FALLBACK_ATTEMPTS = 6;
+
+const fetchEnrollment = async (
+  client: ReturnType<typeof useApolloClient>,
+  input: EnrollmentInput
+): Promise<IEnrollment | null> => {
+  try {
+    const response = await client.query({
+      query: GetEnrollmentDocument,
+      variables: {
+        year: input.year,
+        semester: input.semester,
+        sessionId: input.sessionId,
+        subject: input.subject,
+        courseNumber: input.courseNumber,
+        sectionNumber: input.sectionNumber,
+      },
+      fetchPolicy: "no-cache",
+    });
+
+    return response.data?.enrollment ?? null;
+  } catch {
+    return null;
+  }
+};
+
+const resolveEnrollmentSelection = async (
+  client: ReturnType<typeof useApolloClient>,
+  input: EnrollmentInput,
+  courseClassesByKey: Map<string, ICourseWithInstructorClass[]>
+): Promise<{ input: EnrollmentInput; data: IEnrollment } | null> => {
+  const direct = await fetchEnrollment(client, input);
+  if (direct && hasValidEnrollmentActivity(direct)) {
+    return { input, data: direct };
+  }
+
+  const courseKey = `${input.subject}-${input.courseNumber}`;
+  let courseClasses = courseClassesByKey.get(courseKey);
+  if (!courseClasses) {
+    try {
+      const courseResponse = await client.query({
+        query: GetCourseWithInstructorDocument,
+        variables: {
+          subject: input.subject,
+          number: input.courseNumber,
+        },
+        fetchPolicy: "cache-first",
+      });
+      courseClasses = courseResponse.data?.course?.classes ?? [];
+    } catch {
+      courseClasses = [];
+    }
+    courseClassesByKey.set(courseKey, courseClasses);
+  }
+
+  let attempts = 0;
+  for (const courseClass of listEnrollmentSectionCandidates(courseClasses)) {
+    const candidate = enrollmentInputFromCandidate(
+      input.subject,
+      input.courseNumber,
+      courseClass
+    );
+    if (!candidate || isEnrollmentInputEqual(candidate, input)) continue;
+    if (attempts >= MAX_ENROLLMENT_FALLBACK_ATTEMPTS) break;
+    attempts += 1;
+
+    const data = await fetchEnrollment(client, candidate);
+    if (data && hasValidEnrollmentActivity(data)) {
+      return { input: candidate, data };
+    }
+  }
+
+  return null;
+};
+
 const loadOutputsFromInputs = async (
   client: ReturnType<typeof useApolloClient>,
   inputs: EnrollmentInput[]
@@ -177,59 +258,41 @@ const loadOutputsFromInputs = async (
     )
     .slice(0, MAX_COURSES);
 
-  const results = await Promise.all(
-    dedupedInputs.map(async (input) => {
-      try {
-        const response = await client.query({
-          query: GetEnrollmentDocument,
-          variables: {
-            year: input.year,
-            semester: input.semester,
-            sessionId: input.sessionId,
-            subject: input.subject,
-            courseNumber: input.courseNumber,
-            sectionNumber: input.sectionNumber,
-          },
-          fetchPolicy: "no-cache",
-        });
+  const courseClassesByKey = new Map<string, ICourseWithInstructorClass[]>();
+  const resolved: { input: EnrollmentInput; data: IEnrollment }[] = [];
 
-        if (!response.data?.enrollment) return null;
-        if (!hasValidEnrollmentActivity(response.data.enrollment)) return null;
+  for (const input of dedupedInputs) {
+    const selection = await resolveEnrollmentSelection(
+      client,
+      input,
+      courseClassesByKey
+    );
+    if (!selection) continue;
+    if (
+      resolved.some((existing) =>
+        isEnrollmentInputEqual(existing.input, selection.input)
+      )
+    ) {
+      continue;
+    }
+    resolved.push(selection);
+  }
 
-        return {
-          input,
-          data: response.data.enrollment,
-        };
-      } catch {
-        return null;
-      }
-    })
-  );
-
-  return results
-    .filter(
-      (
-        result
-      ): result is {
-        input: EnrollmentInput;
-        data: IEnrollment;
-      } => Boolean(result)
-    )
-    .map((result, index) => ({
-      id: getEnrollmentInputId(result.input),
-      course: {
-        subject: result.input.subject,
-        number: result.input.courseNumber,
-        courseId:
-          result.data.sectionId ??
-          `${result.input.subject}-${result.input.courseNumber}`,
-      },
-      subtitle: getOutputMetadataFromInput(result.input),
-      input: result.input,
-      color: LIGHT_COLORS[index] ?? LIGHT_COLORS[0],
-      darkColor: DARK_COLORS[index] ?? DARK_COLORS[0],
-      data: result.data,
-    }));
+  return resolved.map((result, index) => ({
+    id: getEnrollmentInputId(result.input),
+    course: {
+      subject: result.input.subject,
+      number: result.input.courseNumber,
+      courseId:
+        result.data.sectionId ??
+        `${result.input.subject}-${result.input.courseNumber}`,
+    },
+    subtitle: getOutputMetadataFromInput(result.input),
+    input: result.input,
+    color: LIGHT_COLORS[index] ?? LIGHT_COLORS[0],
+    darkColor: DARK_COLORS[index] ?? DARK_COLORS[0],
+    data: result.data,
+  }));
 };
 
 function EnrollmentSidebar({

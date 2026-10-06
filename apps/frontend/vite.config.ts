@@ -1,4 +1,5 @@
 import react from "@vitejs/plugin-react";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +10,9 @@ const require = createRequire(import.meta.url);
 // Recharts imports `react-is`; resolution can fail under esbuild when deps are hoisted
 // to the monorepo root (e.g. Docker + turbo prune). Resolve the real install path.
 const reactIsRoot = dirname(require.resolve("react-is/package.json"));
+// Colima/Docker does not forward macOS filesystem events into the container,
+// so Vite never sees saves on the bind mount unless it polls.
+const inDocker = existsSync("/.dockerenv");
 
 export default defineConfig({
   // Load VITE_* from the monorepo root `.env` (same file as backend).
@@ -17,6 +21,7 @@ export default defineConfig({
     host: true,
     port: 3000,
     allowedHosts: ["frontend", "localhost", ".localhost"],
+    watch: inDocker ? { usePolling: true, interval: 100 } : undefined,
   },
   optimizeDeps: {
     include: ["react-is", "recharts"],

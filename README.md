@@ -23,6 +23,7 @@ EECStime is a modified version of [Berkeleytime](https://github.com/asuc-octo/be
 - see final exam time and date
 - see # of students enrolled in each section on hover
 - fetch live enrollment data with refresh button
+- link to past semester enrollment if a class hasn't opened for enrollment
 
 ### Scheduler:
 

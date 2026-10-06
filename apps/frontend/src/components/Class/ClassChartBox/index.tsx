@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 
+import classNames from "classnames";
 import { ArrowUpRight } from "iconoir-react";
 
 import { Box, Button, Container, LoadingIndicator } from "@repo/theme";
@@ -11,6 +12,7 @@ interface ClassChartBoxProps {
   subtitle?: string | null;
   actionLabel: string;
   actionHref: string;
+  showActionWhenEmpty?: boolean;
   loading?: boolean;
   emptyState?: {
     icon: ReactNode;
@@ -25,10 +27,27 @@ export default function ClassChartBox({
   subtitle,
   actionLabel,
   actionHref,
+  showActionWhenEmpty = false,
   loading,
   emptyState,
   children,
 }: ClassChartBoxProps) {
+  const action = (
+    <Button
+      as="a"
+      href={actionHref}
+      target="_blank"
+      rel="noreferrer noopener"
+      variant="secondary"
+      className={classNames(styles.openButton, {
+        [styles.emptyAction]: Boolean(emptyState),
+      })}
+    >
+      {actionLabel}
+      <ArrowUpRight height={16} width={16} />
+    </Button>
+  );
+
   if (loading) {
     return (
       <Box p="5" className={styles.root}>
@@ -52,6 +71,7 @@ export default function ClassChartBox({
               <div className={styles.emptyIcon}>{emptyState.icon}</div>
               <p className={styles.emptyHeading}>{emptyState.heading}</p>
               <p className={styles.emptyParagraph}>{emptyState.paragraph}</p>
+              {showActionWhenEmpty && action}
             </div>
           </div>
         </Container>
@@ -68,17 +88,7 @@ export default function ClassChartBox({
               <h2 className={styles.title}>{title}</h2>
               {subtitle && <p className={styles.subtitle}>{subtitle}</p>}
             </div>
-            <Button
-              as="a"
-              href={actionHref}
-              target="_blank"
-              rel="noreferrer noopener"
-              variant="secondary"
-              className={styles.openButton}
-            >
-              {actionLabel}
-              <ArrowUpRight height={16} width={16} />
-            </Button>
+            {action}
           </div>
           {children}
         </div>

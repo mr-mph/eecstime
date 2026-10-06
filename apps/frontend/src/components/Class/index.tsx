@@ -1,4 +1,5 @@
 import {
+  type MouseEvent,
   ReactNode,
   lazy,
   useCallback,
@@ -7,7 +8,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type MouseEvent,
 } from "react";
 
 import { useMutation, useQuery } from "@apollo/client/react";
@@ -51,8 +51,8 @@ import {
   TRACK_CLASS_VIEW,
   signIn,
 } from "@/lib/api";
-import { getEnrollmentInputSearchParam } from "@/lib/enrollmentUrl";
 import { requestCatalogEnrollmentRefresh } from "@/lib/catalogEnrollmentRefresh";
+import { getEnrollmentInputSearchParam } from "@/lib/enrollmentUrl";
 import {
   CreateRatingsDocument,
   GetClassDetailsDocument,
@@ -621,6 +621,20 @@ export default function Class({
     return <></>;
   }
 
+  const enrollmentPagePath = `/enrollment?input=${encodeURIComponent(
+    getEnrollmentInputSearchParam({
+      subject: _class.subject,
+      courseNumber: _class.courseNumber,
+      year: _class.year,
+      semester: _class.semester,
+      sessionId: _class.sessionId ?? undefined,
+      sectionNumber: _class.number,
+    })
+  )}`;
+  const hasCurrentEnrollment =
+    primarySection?.enrollment?.latest?.enrolledCount != null &&
+    primarySection?.enrollment?.latest?.maxEnroll != null;
+
   return (
     <>
       <Root dialog={dialog} activeTab={activeTab} onTabChange={setActiveTab}>
@@ -762,16 +776,7 @@ export default function Class({
                   >
                     {(content) => (
                       <Link
-                        to={`/enrollment?input=${encodeURIComponent(
-                          getEnrollmentInputSearchParam({
-                            subject: _class.subject,
-                            courseNumber: _class.courseNumber,
-                            year: _class.year,
-                            semester: _class.semester,
-                            sessionId: _class.sessionId ?? undefined,
-                            sectionNumber: _class.number,
-                          })
-                        )}`}
+                        to={enrollmentPagePath}
                         target="_blank"
                         rel="noopener noreferrer"
                         style={{
@@ -783,6 +788,16 @@ export default function Class({
                       </Link>
                     )}
                   </EnrollmentDisplay>
+                  {!hasCurrentEnrollment && (
+                    <Link
+                      to={enrollmentPagePath}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={styles.pastEnrollmentLink}
+                    >
+                      View past enrollment
+                    </Link>
+                  )}
                   {hasCourseGradeSummary && (
                     <Link
                       to={`/grades?input=${encodeURIComponent(

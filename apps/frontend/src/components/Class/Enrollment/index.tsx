@@ -34,10 +34,15 @@ import {
   useCapacityChangeTooltip,
 } from "@/components/Chart";
 import ClassChartBox from "@/components/Class/ClassChartBox";
+import { useReadCourseWithInstructor } from "@/hooks/api";
 import { useGetClassEnrollment } from "@/hooks/api/classes/useGetClass";
 import { useReadEnrollmentTimeframes } from "@/hooks/api/enrollment";
 import useClass from "@/hooks/useClass";
-import { getEnrollmentInputSearchParam } from "@/lib/enrollmentUrl";
+import {
+  enrollmentInputFromCandidate,
+  getEnrollmentInputSearchParam,
+  listEnrollmentSectionCandidates,
+} from "@/lib/enrollmentUrl";
 
 import styles from "./Enrollment.module.scss";
 
@@ -262,19 +267,37 @@ export default function Enrollment() {
     [data]
   );
 
+  const needsPastEnrollment =
+    !loading && (data.length === 0 || !hasEnrolledActivity);
+  const { data: courseWithHistory } = useReadCourseWithInstructor(
+    _class.subject,
+    _class.courseNumber,
+    { skip: !needsPastEnrollment }
+  );
+
   const enrollmentExplorerUrl = useMemo(() => {
+    const currentInput = {
+      subject: _class.subject,
+      courseNumber: _class.courseNumber,
+      year: _class.year,
+      semester: _class.semester,
+      sessionId: _class.sessionId ?? undefined,
+      sectionNumber: _class.number,
+    };
+    const pastSection = needsPastEnrollment
+      ? listEnrollmentSectionCandidates(courseWithHistory?.classes ?? [])[0]
+      : undefined;
+    const input =
+      (pastSection &&
+        enrollmentInputFromCandidate(
+          _class.subject,
+          _class.courseNumber,
+          pastSection
+        )) ||
+      currentInput;
+
     const params = new URLSearchParams();
-    params.set(
-      "input",
-      getEnrollmentInputSearchParam({
-        subject: _class.subject,
-        courseNumber: _class.courseNumber,
-        year: _class.year,
-        semester: _class.semester,
-        sessionId: _class.sessionId ?? undefined,
-        sectionNumber: _class.number,
-      })
-    );
+    params.set("input", getEnrollmentInputSearchParam(input));
 
     if (typeof window !== "undefined") {
       try {
@@ -295,6 +318,8 @@ export default function Enrollment() {
     _class.semester,
     _class.sessionId,
     _class.number,
+    needsPastEnrollment,
+    courseWithHistory?.classes,
   ]);
 
   const emptyState = useMemo(() => {
@@ -302,13 +327,8 @@ export default function Enrollment() {
       return {
         icon: <GraphUp width={32} height={32} />,
         heading: "No Enrollment Data Available",
-        paragraph: (
-          <>
-            This class doesn&apos;t have enrollment history data yet.
-            <br />
-            Enrollment trends will appear here once data is available.
-          </>
-        ),
+        paragraph:
+          "This class doesn't have enrollment history for this semester.",
       };
     }
     if (!hasEnrolledActivity) {
@@ -326,8 +346,13 @@ export default function Enrollment() {
     <ClassChartBox
       title="Enrollment History"
       subtitle={`${_class.semester} ${_class.year}`}
-      actionLabel="Open in Enrollment"
+      actionLabel={
+        needsPastEnrollment
+          ? "Open Last Semester's Enrollment"
+          : "Open in Enrollment"
+      }
       actionHref={enrollmentExplorerUrl}
+      showActionWhenEmpty
       loading={loading && !enrollmentData}
       emptyState={emptyState}
     >

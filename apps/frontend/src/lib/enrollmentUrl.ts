@@ -1,3 +1,4 @@
+import { sortByTermDescending } from "@/lib/classes";
 import { Semester } from "@/lib/generated/graphql";
 
 export interface EnrollmentUrlInput {
@@ -71,4 +72,81 @@ export const parseEnrollmentInputsFromUrl = (
         isEnrollmentInputEqual(candidate, input)
       ) === index
   );
+};
+
+export interface EnrollmentSectionCandidate {
+  year: number;
+  semester: string;
+  sessionId?: string | null;
+  number: string;
+  primarySection?: {
+    number?: string | null;
+    enrollment?: {
+      latest?: unknown | null;
+    } | null;
+  } | null;
+}
+
+const sectionNumberOf = (courseClass: EnrollmentSectionCandidate) =>
+  courseClass.primarySection?.number ?? courseClass.number;
+
+export const hasEnrollmentLatest = (courseClass: EnrollmentSectionCandidate) =>
+  Boolean(
+    sectionNumberOf(courseClass) &&
+      courseClass.primarySection?.enrollment?.latest
+  );
+
+// Most recent semester first. Within a semester, lowest section number first.
+export const listEnrollmentSectionCandidates = <
+  T extends EnrollmentSectionCandidate,
+>(
+  classes: T[]
+): T[] => {
+  const withData = classes.filter(hasEnrollmentLatest);
+  const terms = withData
+    .filter(
+      (courseClass, index, allClasses) =>
+        allClasses.findIndex(
+          (candidate) =>
+            candidate.year === courseClass.year &&
+            candidate.semester === courseClass.semester
+        ) === index
+    )
+    .toSorted(sortByTermDescending);
+
+  return terms.flatMap((term) =>
+    withData
+      .filter(
+        (courseClass) =>
+          courseClass.year === term.year &&
+          courseClass.semester === term.semester
+      )
+      .toSorted((a, b) => {
+        const bySection = sectionNumberOf(a).localeCompare(
+          sectionNumberOf(b),
+          undefined,
+          { numeric: true }
+        );
+        if (bySection !== 0) return bySection;
+        return (a.sessionId ?? "").localeCompare(b.sessionId ?? "");
+      })
+  );
+};
+
+export const enrollmentInputFromCandidate = (
+  subject: string,
+  courseNumber: string,
+  courseClass: EnrollmentSectionCandidate
+): EnrollmentUrlInput | null => {
+  const sectionNumber = courseClass.primarySection?.number;
+  if (!sectionNumber) return null;
+
+  return {
+    subject,
+    courseNumber,
+    year: courseClass.year,
+    semester: courseClass.semester as Semester,
+    sectionNumber,
+    sessionId: courseClass.sessionId || undefined,
+  };
 };
