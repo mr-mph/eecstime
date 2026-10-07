@@ -408,8 +408,7 @@ export default function Overview() {
                       return (
                         <span>
                           {finalExamLabel ? <br /> : null}
-                          {dateStr} · {timeStr} (estimated from the{" "}
-                          {_class.semester} {_class.year} final exam schedule)
+                          {dateStr} · {timeStr} (predicted)
                         </span>
                       );
                     })()}
