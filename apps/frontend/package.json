@@ -4,7 +4,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "predev": "node --experimental-strip-types scripts/update-final-exam-calendars.ts",
     "build": "vite build",
+    "prebuild": "node --experimental-strip-types scripts/update-final-exam-calendars.ts",
+    "update-final-exam-calendars": "node --experimental-strip-types scripts/update-final-exam-calendars.ts",
     "lint": "eslint src/",
     "start": "serve -s dist -p 3000",
     "test": "vitest run",

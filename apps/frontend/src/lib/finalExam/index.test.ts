@@ -251,11 +251,29 @@ describe("getDerivedFinalExam", () => {
 
   it("returns null for terms without a calendar", () => {
     expect(
-      getDerivedFinalExam(makeClass({ year: 2027, semester: "Spring" }))
+      getDerivedFinalExam(makeClass({ year: 2028, semester: "Spring" }))
     ).toBeNull();
     expect(
       getDerivedFinalExam(makeClass({ year: 2026, semester: "Spring" }))
     ).toBeNull();
+  });
+
+  it("derives Spring 2027 exams from the registrar calendar", () => {
+    expect(
+      getDerivedFinalExam(
+        makeClass({
+          year: 2027,
+          semester: "Spring",
+          days: DAYS.MWF,
+          startTime: "08:00:00",
+        })
+      )
+    ).toMatchObject({
+      group: 1,
+      date: "2027-05-10",
+      startTime: "08:00",
+      source: "derived",
+    });
   });
 });
 

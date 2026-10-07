@@ -1,0 +1,642 @@
+{
+  "2026 Fall": {
+    "slots": [
+      {
+        "group": 1,
+        "date": "2026-12-14",
+        "startTime": "08:00",
+        "endTime": "11:00"
+      },
+      {
+        "group": 2,
+        "date": "2026-12-14",
+        "startTime": "11:30",
+        "endTime": "14:30"
+      },
+      {
+        "group": 3,
+        "date": "2026-12-14",
+        "startTime": "15:00",
+        "endTime": "18:00"
+      },
+      {
+        "group": 4,
+        "date": "2026-12-14",
+        "startTime": "19:00",
+        "endTime": "22:00"
+      },
+      {
+        "group": 5,
+        "date": "2026-12-15",
+        "startTime": "08:00",
+        "endTime": "11:00"
+      },
+      {
+        "group": 6,
+        "date": "2026-12-15",
+        "startTime": "11:30",
+        "endTime": "14:30"
+      },
+      {
+        "group": 7,
+        "date": "2026-12-15",
+        "startTime": "15:00",
+        "endTime": "18:00"
+      },
+      {
+        "group": 8,
+        "date": "2026-12-15",
+        "startTime": "19:00",
+        "endTime": "22:00"
+      },
+      {
+        "group": 9,
+        "date": "2026-12-16",
+        "startTime": "08:00",
+        "endTime": "11:00"
+      },
+      {
+        "group": 10,
+        "date": "2026-12-16",
+        "startTime": "11:30",
+        "endTime": "14:30"
+      },
+      {
+        "group": 11,
+        "date": "2026-12-16",
+        "startTime": "15:00",
+        "endTime": "18:00"
+      },
+      {
+        "group": 12,
+        "date": "2026-12-16",
+        "startTime": "19:00",
+        "endTime": "22:00"
+      },
+      {
+        "group": 13,
+        "date": "2026-12-17",
+        "startTime": "08:00",
+        "endTime": "11:00"
+      },
+      {
+        "group": 14,
+        "date": "2026-12-17",
+        "startTime": "11:30",
+        "endTime": "14:30"
+      },
+      {
+        "group": 15,
+        "date": "2026-12-17",
+        "startTime": "15:00",
+        "endTime": "18:00"
+      },
+      {
+        "group": 16,
+        "date": "2026-12-17",
+        "startTime": "19:00",
+        "endTime": "22:00"
+      },
+      {
+        "group": 17,
+        "date": "2026-12-18",
+        "startTime": "08:00",
+        "endTime": "11:00"
+      },
+      {
+        "group": 18,
+        "date": "2026-12-18",
+        "startTime": "11:30",
+        "endTime": "14:30"
+      },
+      {
+        "group": 19,
+        "date": "2026-12-18",
+        "startTime": "15:00",
+        "endTime": "18:00"
+      },
+      {
+        "group": 20,
+        "date": "2026-12-18",
+        "startTime": "19:00",
+        "endTime": "22:00"
+      }
+    ],
+    "startTimeRules": [
+      {
+        "category": "MWF",
+        "group": 1,
+        "startTimes": [
+          "10:00"
+        ]
+      },
+      {
+        "category": "MWF",
+        "group": 2,
+        "startTimes": [
+          "11:00"
+        ]
+      },
+      {
+        "category": "MWF",
+        "group": 4,
+        "startTimes": [
+          "08:00"
+        ]
+      },
+      {
+        "category": "TuTh",
+        "group": 5,
+        "startTimes": [
+          "14:00"
+        ]
+      },
+      {
+        "category": "TuTh",
+        "group": 7,
+        "startTimes": [
+          "09:00",
+          "09:30"
+        ]
+      },
+      {
+        "category": "MWF",
+        "group": 8,
+        "startTimes": [
+          "15:00",
+          "15:30"
+        ]
+      },
+      {
+        "category": "TuTh",
+        "group": 9,
+        "startTimes": [
+          "11:00"
+        ]
+      },
+      {
+        "category": "TuTh",
+        "group": 11,
+        "startTimes": [
+          "08:00"
+        ]
+      },
+      {
+        "category": "MWF",
+        "group": 12,
+        "startTimes": [
+          "13:00"
+        ]
+      },
+      {
+        "category": "MWF",
+        "group": 13,
+        "startTimes": [
+          "16:00",
+          "16:30"
+        ]
+      },
+      {
+        "category": "TuTh",
+        "group": 14,
+        "startAtOrAfter": "17:00"
+      },
+      {
+        "category": "MWF",
+        "group": 15,
+        "startTimes": [
+          "14:00"
+        ]
+      },
+      {
+        "category": "MWF",
+        "group": 16,
+        "startTimes": [
+          "09:00",
+          "09:30"
+        ]
+      },
+      {
+        "category": "TuTh",
+        "group": 17,
+        "startTimes": [
+          "00:00",
+          "00:30",
+          "13:00"
+        ]
+      },
+      {
+        "category": "MWF",
+        "group": 18,
+        "startTimes": [
+          "12:00",
+          "12:30"
+        ]
+      },
+      {
+        "category": "TuTh",
+        "group": 19,
+        "startTimes": [
+          "10:00"
+        ]
+      },
+      {
+        "category": "MWF",
+        "group": 19,
+        "startAtOrAfter": "17:00"
+      },
+      {
+        "category": "TuTh",
+        "group": 20,
+        "startTimes": [
+          "15:00",
+          "15:30",
+          "16:00"
+        ]
+      }
+    ],
+    "courseRules": [
+      {
+        "subject": "CHEM",
+        "courseNumbers": [
+          "1A",
+          "1B",
+          "3A",
+          "3B",
+          "4A",
+          "4B",
+          "32"
+        ],
+        "group": 3
+      },
+      {
+        "subject": "ECON",
+        "courseNumbers": [
+          "140"
+        ],
+        "group": 3
+      },
+      {
+        "subject": "ECON",
+        "courseNumbers": [
+          "1",
+          "100B"
+        ],
+        "group": 6
+      },
+      {
+        "subject": "UGBA",
+        "courseNumbers": [
+          "101B"
+        ],
+        "group": 6
+      },
+      {
+        "subject": "DATA",
+        "courseNumbers": [
+          "C8"
+        ],
+        "group": 6
+      },
+      {
+        "subject": "STAT",
+        "courseNumbers": [
+          "20"
+        ],
+        "group": 12
+      },
+      {
+        "subject": "ENGLISH",
+        "courseNumbers": [
+          "1A",
+          "1B",
+          "R1A",
+          "R1B"
+        ],
+        "group": 19
+      }
+    ],
+    "onlineGroup": 10,
+    "weekendGroup": 11
+  },
+  "2027 Spring": {
+    "slots": [
+      {
+        "group": 1,
+        "date": "2027-05-10",
+        "startTime": "08:00",
+        "endTime": "11:00"
+      },
+      {
+        "group": 2,
+        "date": "2027-05-10",
+        "startTime": "11:30",
+        "endTime": "14:30"
+      },
+      {
+        "group": 3,
+        "date": "2027-05-10",
+        "startTime": "15:00",
+        "endTime": "18:00"
+      },
+      {
+        "group": 4,
+        "date": "2027-05-10",
+        "startTime": "19:00",
+        "endTime": "22:00"
+      },
+      {
+        "group": 5,
+        "date": "2027-05-11",
+        "startTime": "08:00",
+        "endTime": "11:00"
+      },
+      {
+        "group": 6,
+        "date": "2027-05-11",
+        "startTime": "11:30",
+        "endTime": "14:30"
+      },
+      {
+        "group": 7,
+        "date": "2027-05-11",
+        "startTime": "15:00",
+        "endTime": "18:00"
+      },
+      {
+        "group": 8,
+        "date": "2027-05-11",
+        "startTime": "19:00",
+        "endTime": "22:00"
+      },
+      {
+        "group": 9,
+        "date": "2027-05-12",
+        "startTime": "08:00",
+        "endTime": "11:00"
+      },
+      {
+        "group": 10,
+        "date": "2027-05-12",
+        "startTime": "11:30",
+        "endTime": "14:30"
+      },
+      {
+        "group": 11,
+        "date": "2027-05-12",
+        "startTime": "15:00",
+        "endTime": "18:00"
+      },
+      {
+        "group": 12,
+        "date": "2027-05-12",
+        "startTime": "19:00",
+        "endTime": "22:00"
+      },
+      {
+        "group": 13,
+        "date": "2027-05-13",
+        "startTime": "08:00",
+        "endTime": "11:00"
+      },
+      {
+        "group": 14,
+        "date": "2027-05-13",
+        "startTime": "11:30",
+        "endTime": "14:30"
+      },
+      {
+        "group": 15,
+        "date": "2027-05-13",
+        "startTime": "15:00",
+        "endTime": "18:00"
+      },
+      {
+        "group": 16,
+        "date": "2027-05-13",
+        "startTime": "19:00",
+        "endTime": "22:00"
+      },
+      {
+        "group": 17,
+        "date": "2027-05-14",
+        "startTime": "08:00",
+        "endTime": "11:00"
+      },
+      {
+        "group": 18,
+        "date": "2027-05-14",
+        "startTime": "11:30",
+        "endTime": "14:30"
+      },
+      {
+        "group": 19,
+        "date": "2027-05-14",
+        "startTime": "15:00",
+        "endTime": "18:00"
+      },
+      {
+        "group": 20,
+        "date": "2027-05-14",
+        "startTime": "19:00",
+        "endTime": "22:00"
+      }
+    ],
+    "startTimeRules": [
+      {
+        "category": "MWF",
+        "group": 1,
+        "startTimes": [
+          "08:00"
+        ]
+      },
+      {
+        "category": "TuTh",
+        "group": 2,
+        "startTimes": [
+          "14:00"
+        ]
+      },
+      {
+        "category": "MWF",
+        "group": 4,
+        "startTimes": [
+          "09:00",
+          "09:30"
+        ]
+      },
+      {
+        "category": "MWF",
+        "group": 5,
+        "startTimes": [
+          "13:00"
+        ]
+      },
+      {
+        "category": "MWF",
+        "group": 6,
+        "startTimes": [
+          "14:00"
+        ]
+      },
+      {
+        "category": "MWF",
+        "group": 7,
+        "startTimes": [
+          "10:00"
+        ]
+      },
+      {
+        "category": "MWF",
+        "group": 8,
+        "startTimes": [
+          "11:00"
+        ]
+      },
+      {
+        "category": "TuTh",
+        "group": 10,
+        "startTimes": [
+          "09:00",
+          "09:30"
+        ]
+      },
+      {
+        "category": "MWF",
+        "group": 11,
+        "startTimes": [
+          "12:00",
+          "12:30"
+        ]
+      },
+      {
+        "category": "MWF",
+        "group": 12,
+        "startTimes": [
+          "15:00",
+          "15:30"
+        ]
+      },
+      {
+        "category": "TuTh",
+        "group": 13,
+        "startTimes": [
+          "11:00"
+        ]
+      },
+      {
+        "category": "TuTh",
+        "group": 15,
+        "startTimes": [
+          "00:00",
+          "00:30",
+          "13:00"
+        ]
+      },
+      {
+        "category": "TuTh",
+        "group": 16,
+        "startTimes": [
+          "08:00"
+        ]
+      },
+      {
+        "category": "MWF",
+        "group": 17,
+        "startTimes": [
+          "16:00",
+          "16:30"
+        ]
+      },
+      {
+        "category": "TuTh",
+        "group": 18,
+        "startAtOrAfter": "17:00"
+      },
+      {
+        "category": "TuTh",
+        "group": 19,
+        "startTimes": [
+          "10:00"
+        ]
+      },
+      {
+        "category": "MWF",
+        "group": 19,
+        "startAtOrAfter": "17:00"
+      },
+      {
+        "category": "TuTh",
+        "group": 20,
+        "startTimes": [
+          "15:00",
+          "15:30",
+          "16:00"
+        ]
+      }
+    ],
+    "courseRules": [
+      {
+        "subject": "ECON",
+        "courseNumbers": [
+          "1",
+          "100B"
+        ],
+        "group": 3
+      },
+      {
+        "subject": "UGBA",
+        "courseNumbers": [
+          "101B"
+        ],
+        "group": 3
+      },
+      {
+        "subject": "DATA",
+        "courseNumbers": [
+          "C8"
+        ],
+        "group": 3
+      },
+      {
+        "subject": "CHEM",
+        "courseNumbers": [
+          "1A",
+          "1B",
+          "3A",
+          "3B",
+          "4A",
+          "4B",
+          "32"
+        ],
+        "group": 9
+      },
+      {
+        "subject": "ECON",
+        "courseNumbers": [
+          "140"
+        ],
+        "group": 9
+      },
+      {
+        "subject": "STAT",
+        "courseNumbers": [
+          "20"
+        ],
+        "group": 16
+      },
+      {
+        "subject": "ENGLISH",
+        "courseNumbers": [
+          "1A",
+          "1B",
+          "R1A",
+          "R1B"
+        ],
+        "group": 19
+      }
+    ],
+    "onlineGroup": 14,
+    "weekendGroup": 16
+  }
+}
