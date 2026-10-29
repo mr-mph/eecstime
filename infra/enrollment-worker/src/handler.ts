@@ -31,7 +31,10 @@ import {
   type EnrollmentWorkerBatch,
   type EnrollmentWorkerClass,
   type EnrollmentWorkerManifest,
+  type EnrollmentWorkerFetchEvent,
+  type EnrollmentWorkerLiveStatus,
   type EnrollmentWorkerResult,
+  type EnrollmentWorkerRunSummary,
 } from "../../../packages/shared/enrollmentWorker";
 import {
   fetchUcbCatalogEnrollment,
@@ -43,6 +46,11 @@ const BUCKET = process.env.BUCKET ?? "";
 const MAX_RPS = Number(process.env.MAX_REQUESTS_PER_SECOND ?? "1");
 const RUN_BUDGET_MS = Number(process.env.RUN_BUDGET_MS ?? "270000");
 const REQUEST_TIMEOUT_MS = 20_000;
+/**
+ * Classes fetched at once. The pacer still spaces request *starts* >= 1/MAX_RPS
+ * apart; concurrency only stops a slow page from idling the budget.
+ */
+const CONCURRENCY = Number(process.env.CONCURRENCY ?? "8");
 const FLUSH_EVERY_MS = 60_000;
 const THROTTLE_PAUSE_MS = 15 * 60_000;
 const UNCHANGED_BACKOFF = 1.5;
@@ -55,6 +63,10 @@ const POPULAR_MAX_MIN_INTERVAL_SEC = 30 * 60;
 const RETRY_TIMEOUTS_MS = [45_000, 60_000];
 /** Never start a request that could run past this point (Lambda timeout 295s). */
 const SAFE_END_MS = 285_000;
+/** Dashboard live-status write interval. */
+const LIVE_STATUS_EVERY_MS = 10_000;
+const LIVE_RECENT = 60;
+const RUN_HISTORY = 48;
 const USER_AGENT =
   process.env.USER_AGENT ??
   "EECStimeEnrollmentWorker/1.0 (+https://eecstime.sethw.dev)";
@@ -77,12 +89,16 @@ type ClassState = {
   /** A popular class timed out: retry it first next run with this timeout. */
   retryTimeoutMs?: number;
   timeoutRetries?: number;
+  /** Epoch ms of the last successful fetch. */
+  okAt?: number;
 };
 
 type SchedulerState = {
   version: 1;
   pausedUntil?: number;
   classes: Record<string, ClassState>;
+  /** Recent run summaries, newest last (for the dashboard). */
+  runs?: EnrollmentWorkerRunSummary[];
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -97,6 +113,17 @@ const readJsonGz = async <T>(key: string): Promise<T | null> => {
     throw error;
   }
 };
+
+const writeJson = (key: string, value: unknown) =>
+  s3.send(
+    new PutObjectCommand({
+      Bucket: BUCKET,
+      Key: key,
+      Body: JSON.stringify(value),
+      ContentType: "application/json",
+      CacheControl: "no-store",
+    })
+  );
 
 const writeJsonGz = (key: string, value: unknown) =>
   s3.send(
@@ -198,6 +225,7 @@ const dueClasses = (
     .map((c) => {
       const s = state.classes[c.id];
       const minInterval = minIntervalOf(c);
+      // Timeout retries of popular classes jump the queue.
       if (!s || s.retryTimeoutMs) {
         return { c, minInterval, ratio: Number.POSITIVE_INFINITY };
       }
@@ -223,26 +251,59 @@ export const handler = async () => {
   const state: SchedulerState = savedState ?? { version: 1, classes: {} };
   if (state.pausedUntil && state.pausedUntil > started) {
     console.log(`Paused after throttling until ${new Date(state.pausedUntil).toISOString()}`);
+    await writeJson(ENROLLMENT_WORKER_KEYS.liveStatus, {
+      version: 1,
+      updatedAt: started,
+      run: {
+        state: "paused",
+        startedAt: started,
+        budgetEndsAt: started,
+        finishedAt: started,
+        pausedUntil: state.pausedUntil,
+        due: 0,
+        fetched: 0,
+        changed: 0,
+        failed: 0,
+        requests: 0,
+        concurrency: CONCURRENCY,
+        maxRequestsPerSecond: MAX_RPS,
+      },
+      inFlight: [],
+      recent: [],
+    } satisfies EnrollmentWorkerLiveStatus);
     return;
   }
 
-  // One pacer for every request this run makes.
+  // One pacer for every request this run makes. Callers take turns, and each
+  // start is measured from the previous request's *actual* start, so a late
+  // timer or busy event loop can never squeeze two starts closer than gapMs.
   const gapMs = 1000 / MAX_RPS;
-  let nextSlot = 0;
+  let gate: Promise<void> = Promise.resolve();
+  let lastStart = 0;
+  const acquireSlot = () =>
+    (gate = gate.then(async () => {
+      const wait = lastStart + gapMs - Date.now();
+      if (wait > 0) await sleep(wait);
+      // setTimeout can fire a hair early.
+      while (Date.now() < lastStart + gapMs) await sleep(1);
+      lastStart = Date.now();
+    }));
   let requests = 0;
   let throttled = false;
-  /** When the first (class) page of the current attempt was generated. */
-  let pageGeneratedAt: number | null = null;
+  let inFlight = 0;
+  let maxInFlight = 0;
   const pacedFetch: typeof fetch = async (input, init) => {
-    const now = Date.now();
-    const at = Math.max(now, nextSlot);
-    nextSlot = at + gapMs;
-    if (at > now) await sleep(at - now);
+    await acquireSlot();
     requests += 1;
-    const response = await fetch(input, init);
-    if (response.status === 429 || response.status === 503) throttled = true;
-    pageGeneratedAt ??= generatedAt(response);
-    return response;
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    try {
+      const response = await fetch(input, init);
+      if (response.status === 429 || response.status === 503) throttled = true;
+      return response;
+    } finally {
+      inFlight -= 1;
+    }
   };
 
   /**
@@ -258,27 +319,41 @@ export const handler = async () => {
       ? [knownVia, ...c.urls.filter((u) => u !== knownVia)]
       : c.urls;
     let timedOut = false;
+    let error: string | undefined;
     for (const url of urls) {
       if (throttled) break;
-      pageGeneratedAt = null;
+      // When this attempt's class page (its first request) was generated.
+      let pageGeneratedAt: number | null = null;
+      const attemptFetch: typeof fetch = async (input, init) => {
+        const response = await pacedFetch(input, init);
+        pageGeneratedAt ??= generatedAt(response);
+        return response;
+      };
       try {
         const data = await fetchUcbCatalogEnrollment(url, {
-          fetch: pacedFetch,
+          fetch: attemptFetch,
           userAgent: USER_AGENT,
           timeoutMs,
         });
-        if (!isBlankUcbEnrollment(data.primary)) return { data, url, timedOut };
-      } catch (error) {
+        if (!isBlankUcbEnrollment(data.primary)) {
+          return { data, url, timedOut, pageGeneratedAt, error };
+        }
+        error = "page has no enrollment numbers";
+      } catch (err) {
         // Try the next cross-listing; persistent failures back off below.
-        if (isTimeout(error)) timedOut = true;
+        if (isTimeout(err)) timedOut = true;
+        error = err instanceof Error ? err.message : String(err);
       }
     }
-    return { data: null, url: null, timedOut };
+    return { data: null, url: null, timedOut, pageGeneratedAt: null, error };
   };
 
   let pending: EnrollmentWorkerResult[] = [];
   let lastFlush = Date.now();
-  const flush = async () => {
+  let flushing: Promise<void> = Promise.resolve();
+  // Serialized so concurrent workers never write two batches with one key.
+  const flush = () => (flushing = flushing.then(flushNow));
+  const flushNow = async () => {
     if (!pending.length) return;
     const batch: EnrollmentWorkerBatch = {
       version: 1,
@@ -300,6 +375,17 @@ export const handler = async () => {
   );
   const minIntervalOf = (c: EnrollmentWorkerClass) =>
     groupMinInterval.get(c.id) ?? c.minIntervalSec;
+  // A class seen for the first time is treated as last fetched one interval
+  // ago: due now, then growing more urgent at the same pace as everything
+  // else. (Ranking never-fetched classes first would let a backlog, e.g. a
+  // new term, starve refreshes of popular classes for hours.)
+  let seeded = 0;
+  for (const c of manifest.classes) {
+    if (state.classes[c.id]) continue;
+    const interval = minIntervalOf(c);
+    state.classes[c.id] = { last: started - interval * 1000, intervalSec: interval };
+    seeded += 1;
+  }
   const queue = dueClasses(manifest, state, started, followers, minIntervalOf);
   const byId = new Map(manifest.classes.map((c) => [c.id, c]));
   let ok = 0;
@@ -308,12 +394,50 @@ export const handler = async () => {
   let retried = 0;
   let followerUpdates = 0;
 
-  for (const c of queue) {
-    if (Date.now() >= started + RUN_BUDGET_MS || throttled) break;
+  // Live status for the dashboard.
+  const inFlightClasses = new Map<
+    string,
+    { id: string; url: string; startedAt: number; timeoutMs: number }
+  >();
+  const recent: EnrollmentWorkerFetchEvent[] = [];
+  const record = (event: EnrollmentWorkerFetchEvent) => {
+    recent.unshift(event);
+    if (recent.length > LIVE_RECENT) recent.length = LIVE_RECENT;
+  };
+  let finishedAt: number | null = null;
+  const liveStatus = (): EnrollmentWorkerLiveStatus => ({
+    version: 1,
+    updatedAt: Date.now(),
+    run: {
+      state: finishedAt ? "finished" : "running",
+      startedAt: started,
+      budgetEndsAt: started + RUN_BUDGET_MS,
+      finishedAt,
+      pausedUntil: state.pausedUntil ?? null,
+      due: queue.length,
+      fetched: ok,
+      changed,
+      failed,
+      requests,
+      concurrency: CONCURRENCY,
+      maxRequestsPerSecond: MAX_RPS,
+    },
+    inFlight: [...inFlightClasses.values()],
+    recent,
+  });
+  let liveWrite: Promise<unknown> = Promise.resolve();
+  const writeLive = () =>
+    (liveWrite = liveWrite
+      .then(() => writeJson(ENROLLMENT_WORKER_KEYS.liveStatus, liveStatus()))
+      .catch((error) => console.warn("live status write failed", error)));
+  void writeLive();
+  const liveTimer = setInterval(() => void writeLive(), LIVE_STATUS_EVERY_MS);
+
+  const processClass = async (c: EnrollmentWorkerClass) => {
     const prev = state.classes[c.id];
     const timeoutMs = prev?.retryTimeoutMs ?? REQUEST_TIMEOUT_MS;
     // Worst case is two requests that both time out.
-    if (Date.now() + 2 * timeoutMs > started + SAFE_END_MS) continue;
+    if (Date.now() + 2 * timeoutMs > started + SAFE_END_MS) return;
     const minInterval = minIntervalOf(c);
     const interval = clamp(
       prev?.intervalSec ?? minInterval,
@@ -326,11 +450,18 @@ export const handler = async () => {
       started - prev.viaCheckedAt <= FOLLOWER_RECHECK_MS;
     if (prev?.retryTimeoutMs) retried += 1;
 
-    const { data, url, timedOut } = await fetchClass(
+    const classStarted = Date.now();
+    inFlightClasses.set(c.id, {
+      id: c.id,
+      url: viaFresh ? prev!.via! : c.urls[0],
+      startedAt: classStarted,
+      timeoutMs,
+    });
+    const { data, url, timedOut, pageGeneratedAt, error } = await fetchClass(
       c,
       timeoutMs,
       viaFresh ? prev!.via : undefined
-    );
+    ).finally(() => inFlightClasses.delete(c.id));
     const fetchedAt = Date.now();
     const observedAt = pageGeneratedAt ?? fetchedAt;
 
@@ -349,6 +480,7 @@ export const handler = async () => {
         hash,
         via,
         viaCheckedAt: via ? (viaFresh ? prev!.viaCheckedAt : fetchedAt) : undefined,
+        okAt: fetchedAt,
       };
       const alsoIds = followersOf.get(c.id) ?? [];
       for (const id of alsoIds) {
@@ -358,6 +490,7 @@ export const handler = async () => {
           last: fetchedAt,
           intervalSec: clamp(nextInterval, f.minIntervalSec, f.maxIntervalSec),
           hash,
+          okAt: fetchedAt,
         };
       }
       followerUpdates += alsoIds.length;
@@ -370,6 +503,18 @@ export const handler = async () => {
       });
       ok += 1;
       if (didChange) changed += 1;
+      record({
+        id: c.id,
+        at: fetchedAt,
+        ok: true,
+        observedAt,
+        enrolled: data.primary.enrolledCount,
+        max: data.primary.maxEnroll,
+        waitlisted: data.primary.waitlistedCount,
+        changed: didChange,
+        followers: alsoIds.length || undefined,
+        ms: fetchedAt - classStarted,
+      });
     } else if (!throttled) {
       const retries = prev?.timeoutRetries ?? 0;
       const retryPopular =
@@ -389,15 +534,51 @@ export const handler = async () => {
         timeoutRetries: retryPopular ? retries + 1 : undefined,
       };
       failed += 1;
+      record({
+        id: c.id,
+        at: fetchedAt,
+        ok: false,
+        error: retryPopular
+          ? `${error ?? "failed"} (retrying first next run, ${RETRY_TIMEOUTS_MS[retries] / 1000}s timeout)`
+          : error,
+        ms: fetchedAt - classStarted,
+      });
     }
 
     if (Date.now() - lastFlush >= FLUSH_EVERY_MS) await flush();
-  }
+  };
+
+  // Workers pull from one shared queue; JS is single-threaded, so the
+  // state/counter updates between awaits can't interleave mid-update.
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.max(1, CONCURRENCY) }, async () => {
+      while (next < queue.length) {
+        if (Date.now() >= started + RUN_BUDGET_MS || throttled) return;
+        await processClass(queue[next++]);
+      }
+    })
+  );
 
   await flush();
 
   if (throttled) state.pausedUntil = Date.now() + THROTTLE_PAUSE_MS;
   else delete state.pausedUntil;
+  const seconds = (Date.now() - started) / 1000;
+  const summary: EnrollmentWorkerRunSummary = {
+    startedAt: new Date(started).toISOString(),
+    finishedAt: new Date().toISOString(),
+    due: queue.length,
+    fetched: ok,
+    changed,
+    failed,
+    followerUpdates,
+    requests,
+    maxInFlight,
+    requestsPerSecond: seconds ? Number((requests / seconds).toFixed(2)) : 0,
+    throttled,
+  };
+  state.runs = [...(state.runs ?? []), summary].slice(-RUN_HISTORY);
   // Drop classes that left the manifest so state stays bounded.
   const ids = new Set(manifest.classes.map((c) => c.id));
   for (const id of Object.keys(state.classes)) {
@@ -405,10 +586,14 @@ export const handler = async () => {
   }
   await writeJsonGz(ENROLLMENT_WORKER_KEYS.state, state);
 
-  const seconds = (Date.now() - started) / 1000;
+  clearInterval(liveTimer);
+  finishedAt = Date.now();
+  await writeLive();
+
   console.log(
     JSON.stringify({
       due: queue.length,
+      newlySeen: seeded,
       fetched: ok,
       followers: followers.size,
       followerUpdates,
@@ -416,6 +601,7 @@ export const handler = async () => {
       changed,
       failed,
       requests,
+      maxInFlight,
       requestsPerSecond: seconds ? Number((requests / seconds).toFixed(2)) : 0,
       throttled,
       seconds: Number(seconds.toFixed(1)),

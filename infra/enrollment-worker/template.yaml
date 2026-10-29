@@ -9,6 +9,12 @@ Parameters:
     Type: Number
     Default: 1
     Description: Hard cap on requests per second to classes.berkeley.edu.
+  Concurrency:
+    Type: Number
+    Default: 8
+    Description: >
+      Classes fetched at once. Request starts are still capped by
+      MaxRequestsPerSecond; this only keeps slow pages from idling the budget.
   MemorySize:
     Type: Number
     Default: 192
@@ -89,6 +95,7 @@ Resources:
         Variables:
           BUCKET: !Ref Bucket
           MAX_REQUESTS_PER_SECOND: !Ref MaxRequestsPerSecond
+          CONCURRENCY: !Ref Concurrency
           RUN_BUDGET_MS: "270000"
       # Placeholder; deploy.sh uploads the real bundle with update-function-code.
       Code:
@@ -132,6 +139,83 @@ Resources:
         RetryPolicy:
           MaximumRetryAttempts: 0
 
+  # Read-only status dashboard (src/status.ts) behind a public function URL.
+  # Separate from the worker so loading the page can never start a scrape.
+  StatusLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/eecstime-enrollment-status
+      RetentionInDays: 7
+
+  StatusRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: read-status
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource:
+                  - !Sub ${Bucket.Arn}/status/*
+                  - !Sub ${Bucket.Arn}/state/*
+                  - !Sub ${Bucket.Arn}/manifest/*
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt Bucket.Arn
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub ${StatusLogGroup.Arn}
+
+  StatusFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: StatusLogGroup
+    Properties:
+      FunctionName: eecstime-enrollment-status
+      Runtime: nodejs22.x
+      Architectures: [arm64]
+      Handler: index.handler
+      MemorySize: 256
+      Timeout: 15
+      Role: !GetAtt StatusRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref StatusLogGroup
+      Environment:
+        Variables:
+          BUCKET: !Ref Bucket
+      Code:
+        ZipFile: |
+          exports.handler = async () => ({ statusCode: 503, body: "placeholder: run deploy.sh" });
+
+  StatusUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !GetAtt StatusFunction.Arn
+      AuthType: NONE
+
+  StatusUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref StatusFunction
+      Action: lambda:InvokeFunctionUrl
+      Principal: "*"
+      FunctionUrlAuthType: NONE
+
+  StatusUrlInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref StatusFunction
+      Action: lambda:InvokeFunction
+      Principal: "*"
+      InvokedViaFunctionUrl: true
+
   # Identity the datapuller uses: publish the manifest, read result batches.
   SyncUser:
     Type: AWS::IAM::User
@@ -162,3 +246,7 @@ Outputs:
     Value: !Ref Function
   SyncUserName:
     Value: !Ref SyncUser
+  StatusFunctionName:
+    Value: !Ref StatusFunction
+  StatusUrl:
+    Value: !GetAtt StatusUrl.FunctionUrl

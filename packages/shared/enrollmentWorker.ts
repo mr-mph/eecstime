@@ -10,11 +10,14 @@ import type { ParsedUcbCatalogEnrollment } from "./ucbCatalogEnrollment";
  *   manifest/current.json.gz      datapuller -> worker
  *   state/scheduler.json.gz       worker-private scheduling state
  *   results/<ISO time>.json.gz    worker -> datapuller (expire after 3 days)
+ *   status/live.json              worker -> status dashboard
  */
 export const ENROLLMENT_WORKER_KEYS = {
   manifest: "manifest/current.json.gz",
   state: "state/scheduler.json.gz",
   resultsPrefix: "results/",
+  /** Live run status for the dashboard (rewritten every few seconds). */
+  liveStatus: "status/live.json",
 } as const;
 
 export type EnrollmentWorkerClass = {
@@ -91,4 +94,57 @@ export const decodeEnrollmentWorkerClassId = (
     courseNumber,
     number,
   };
+};
+
+export type EnrollmentWorkerRunSummary = {
+  startedAt: string;
+  finishedAt: string;
+  due: number;
+  fetched: number;
+  changed: number;
+  failed: number;
+  followerUpdates: number;
+  requests: number;
+  maxInFlight: number;
+  requestsPerSecond: number;
+  throttled: boolean;
+};
+
+export type EnrollmentWorkerFetchEvent = {
+  id: string;
+  /** Epoch ms the worker finished this class. */
+  at: number;
+  ok: boolean;
+  /** Page generation time (ok only). */
+  observedAt?: number;
+  enrolled?: number;
+  max?: number;
+  waitlisted?: number;
+  changed?: boolean;
+  followers?: number;
+  error?: string;
+  ms: number;
+};
+
+/** Written by the worker every few seconds while it runs. */
+export type EnrollmentWorkerLiveStatus = {
+  version: 1;
+  updatedAt: number;
+  run: {
+    state: "running" | "finished" | "paused" | "idle";
+    startedAt: number;
+    budgetEndsAt: number;
+    finishedAt: number | null;
+    pausedUntil: number | null;
+    due: number;
+    fetched: number;
+    changed: number;
+    failed: number;
+    requests: number;
+    concurrency: number;
+    maxRequestsPerSecond: number;
+  };
+  inFlight: { id: string; url: string; startedAt: number; timeoutMs: number }[];
+  /** Newest first. */
+  recent: EnrollmentWorkerFetchEvent[];
 };

@@ -3,13 +3,14 @@
 #
 #   bash infra/enrollment-worker/deploy.sh            # from repo root
 #
-# 1. CloudFormation stack (bucket, Lambda, 5-minute schedule, sync IAM user)
+# 1. CloudFormation stack (bucket, Lambda, 5-minute schedule, sync IAM user,
+#    status dashboard Lambda + public URL)
 # 2. Bundles src/handler.ts with esbuild and uploads it to the Lambda
 # 3. On first deploy, creates an access key for the sync user and writes the
 #    ENROLLMENT_WORKER_* settings into the repo's .env for the datapuller
 #
 # Env overrides: AWS_REGION (default us-west-2), MAX_RPS (default 1),
-# MEMORY_MB (default 192),
+# MEMORY_MB (default 192), CONCURRENCY (default 8),
 # RESERVE_CONCURRENCY (default false; needs an account limit above 10).
 set -euo pipefail
 
@@ -27,6 +28,7 @@ aws cloudformation deploy \
   --parameter-overrides \
     "MaxRequestsPerSecond=${MAX_RPS:-1}" \
     "MemorySize=${MEMORY_MB:-192}" \
+    "Concurrency=${CONCURRENCY:-8}" \
     "ReserveConcurrency=${RESERVE_CONCURRENCY:-false}" \
   --no-fail-on-empty-changeset
 
@@ -37,17 +39,28 @@ output() {
 BUCKET="$(output BucketName)"
 FUNCTION="$(output FunctionName)"
 SYNC_USER="$(output SyncUserName)"
+STATUS_FUNCTION="$(output StatusFunctionName)"
+STATUS_URL="$(output StatusUrl)"
 
-echo "==> Bundling worker"
+bundle() { # <entry> <name>
+  mkdir -p "$OUT/$2"
+  npx esbuild "infra/enrollment-worker/src/$1" \
+    --bundle --platform=node --target=node22 --format=cjs \
+    --external:@aws-sdk/* --outfile="$OUT/$2/index.js" --log-level=warning
+  (cd "$OUT/$2" && zip -q ../$2.zip index.js)
+}
+
+echo "==> Bundling worker + status dashboard"
 rm -rf "$OUT" && mkdir -p "$OUT"
-npx esbuild infra/enrollment-worker/src/handler.ts \
-  --bundle --platform=node --target=node22 --format=cjs \
-  --external:@aws-sdk/* --outfile="$OUT/index.js"
-(cd "$OUT" && zip -q worker.zip index.js)
+bundle handler.ts worker
+bundle status.ts status
 
-echo "==> Uploading code to $FUNCTION"
+echo "==> Uploading code to $FUNCTION and $STATUS_FUNCTION"
 aws lambda update-function-code --region "$REGION" \
   --function-name "$FUNCTION" --zip-file "fileb://$OUT/worker.zip" \
+  --query 'LastUpdateStatus' --output text
+aws lambda update-function-code --region "$REGION" \
+  --function-name "$STATUS_FUNCTION" --zip-file "fileb://$OUT/status.zip" \
   --query 'LastUpdateStatus' --output text
 
 if grep -q '^ENROLLMENT_WORKER_ACCESS_KEY_ID=.\+' .env 2>/dev/null; then
@@ -68,5 +81,6 @@ else
 fi
 
 echo "==> Done. Bucket: $BUCKET  Function: $FUNCTION"
+echo "    Status dashboard: $STATUS_URL"
 echo "    Restart the datapuller so it picks up .env:"
 echo "    docker compose up -d --force-recreate datapuller"
