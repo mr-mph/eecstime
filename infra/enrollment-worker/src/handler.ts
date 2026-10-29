@@ -35,6 +35,7 @@ import {
   type EnrollmentWorkerLiveStatus,
   type EnrollmentWorkerResult,
   type EnrollmentWorkerRunSummary,
+  withIndependentStudyLowest,
 } from "../../../packages/shared/enrollmentWorker";
 import {
   fetchUcbCatalogEnrollment,
@@ -258,10 +259,16 @@ const dueClasses = (
   const retries: EnrollmentWorkerClass[] = [];
   const backlog: EnrollmentWorkerClass[] = [];
   const refreshes: { c: EnrollmentWorkerClass; minInterval: number; ratio: number }[] = [];
-  for (const c of manifest.classes) {
+  // Independent study: only once everything else is done.
+  const lowest: { c: EnrollmentWorkerClass; ratio: number }[] = [];
+  for (const c of manifest.classes as (EnrollmentWorkerClass & { lowest?: boolean })[]) {
     if (followers.has(c.id)) continue;
     const s = state.classes[c.id];
-    if (s?.retryTimeoutMs) {
+    if (c.lowest) {
+      const interval = clamp(s?.intervalSec ?? c.minIntervalSec, c.minIntervalSec, c.maxIntervalSec);
+      const ratio = isBacklog(s) ? Number.POSITIVE_INFINITY : (now - s!.last) / 1000 / interval;
+      if (ratio >= 1) lowest.push({ c, ratio });
+    } else if (s?.retryTimeoutMs) {
       retries.push(c);
     } else if (isBacklog(s)) {
       backlog.push(c);
@@ -273,8 +280,14 @@ const dueClasses = (
     }
   }
   refreshes.sort((a, b) => b.ratio - a.ratio || a.minInterval - b.minInterval);
+  lowest.sort((a, b) => b.ratio - a.ratio);
   return {
-    queue: [...retries, ...backlog, ...refreshes.map(({ c }) => c)],
+    queue: [
+      ...retries,
+      ...backlog,
+      ...refreshes.map(({ c }) => c),
+      ...lowest.map(({ c }) => c),
+    ],
     backlog: backlog.length,
   };
 };
@@ -291,6 +304,7 @@ export const handler = async () => {
     console.log("No manifest yet; nothing to do");
     return;
   }
+  manifest.classes = withIndependentStudyLowest(manifest.classes);
   const state: SchedulerState = savedState ?? { version: 1, classes: {} };
   if (state.pausedUntil && state.pausedUntil > started) {
     console.log(`Paused after throttling until ${new Date(state.pausedUntil).toISOString()}`);
@@ -624,7 +638,10 @@ export const handler = async () => {
       });
     } else if (!throttled) {
       const retries = prev?.timeoutRetries ?? 0;
-      const quickRetry = unreachable && retries < RETRY_TIMEOUTS_MS.length;
+      const quickRetry =
+        unreachable &&
+        !(c as { lowest?: boolean }).lowest &&
+        retries < RETRY_TIMEOUTS_MS.length;
       const retryTimeout = timedOut ? RETRY_TIMEOUTS_MS[retries] : REQUEST_TIMEOUT_MS;
       state.classes[c.id] = {
         ...prev,

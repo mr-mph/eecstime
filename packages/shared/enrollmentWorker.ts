@@ -162,3 +162,33 @@ export type EnrollmentWorkerLiveStatus = {
   /** Failures and throttling, newest first, kept across runs. */
   errors: EnrollmentWorkerFetchEvent[];
 };
+
+/**
+ * Independent study / research / field study / individual exam prep (99, 197,
+ * 199, 299, 399, 499, 601, 602, incl. variants like H199 or 299A): one section
+ * per instructor, so not worth polling. The datapuller leaves them out of the
+ * manifest; the worker also treats any that slip in as lowest priority.
+ */
+export const INDEPENDENT_STUDY_NUMBERS =
+  /^[A-Z]*(99|197|199|299|399|499|601|602)[A-Z]?$/;
+
+export const isIndependentStudyNumber = (courseNumber: string) =>
+  INDEPENDENT_STUDY_NUMBERS.test(courseNumber.toUpperCase());
+
+/** Refresh bounds for independent study that reaches the worker. */
+export const INDEPENDENT_STUDY_TIER = {
+  tier: "Independent study (lowest priority)",
+  minIntervalSec: 24 * 60 * 60,
+  maxIntervalSec: 7 * 24 * 60 * 60,
+} as const;
+
+/** Apply the lowest tier to independent study entries of a manifest. */
+export const withIndependentStudyLowest = (
+  classes: EnrollmentWorkerClass[]
+): (EnrollmentWorkerClass & { lowest?: boolean })[] =>
+  classes.map((c) => {
+    const key = decodeEnrollmentWorkerClassId(c.id);
+    return key && isIndependentStudyNumber(key.courseNumber)
+      ? { ...c, ...INDEPENDENT_STUDY_TIER, lowest: true }
+      : c;
+  });

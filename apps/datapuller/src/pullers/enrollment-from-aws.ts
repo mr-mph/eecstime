@@ -34,6 +34,7 @@ import {
   buildUcbCatalogUrl,
   decodeEnrollmentWorkerClassId,
   encodeEnrollmentWorkerClassId,
+  isIndependentStudyNumber,
 } from "@repo/shared";
 
 import { updateCatalogEnrollment } from "../lib/catalog-denormalize";
@@ -132,9 +133,8 @@ const popularityScore = (c: {
  * nothing for anyone else to enroll in, so not worth polling. 98/198 (DeCals,
  * group study) stay. Matches prefixes/suffixes like H199 or 299A.
  */
-const INDEPENDENT_STUDY_NUMBERS = /^[A-Z]*(99|197|199|299|399|499|601|602)[A-Z]?$/;
 const isIndependentStudy = (courseNumber: string, component?: string) =>
-  component === "IND" || INDEPENDENT_STUDY_NUMBERS.test(courseNumber.toUpperCase());
+  component === "IND" || isIndependentStudyNumber(courseNumber);
 
 /** Numeric part of a catalog number: "C191A" -> 191. */
 const catalogLevel = (courseNumber: string) =>

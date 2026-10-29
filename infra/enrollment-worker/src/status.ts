@@ -14,6 +14,7 @@ import {
   type EnrollmentWorkerLiveStatus,
   type EnrollmentWorkerManifest,
   type EnrollmentWorkerRunSummary,
+  withIndependentStudyLowest,
 } from "../../../packages/shared/enrollmentWorker";
 import { DASHBOARD_HTML } from "./status-page";
 
@@ -78,7 +79,7 @@ const buildSummary = async () => {
     readObject(ENROLLMENT_WORKER_KEYS.state, true),
   ])) as [EnrollmentWorkerManifest | null, SchedulerState | null];
   const now = Date.now();
-  const classes = manifest?.classes ?? [];
+  const classes = withIndependentStudyLowest(manifest?.classes ?? []);
   pageById = new Map(classes.map((c) => [c.id, c.urls[0]]));
   const states = state?.classes ?? {};
 
