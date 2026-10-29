@@ -1,5 +1,6 @@
 export * from "./catalogSortMetrics";
 export * from "./eecsRequirements";
+export * from "./enrollmentWorker";
 export * from "./enrollmentCatalogRefresh";
 export * from "./lsBreadths";
 export * from "./metrics";

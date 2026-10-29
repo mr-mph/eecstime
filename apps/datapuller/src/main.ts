@@ -10,6 +10,7 @@ import classesPuller from "./pullers/classes";
 import coursesPuller from "./pullers/courses";
 import decalsPuller from "./pullers/decals";
 import eecsDraftSchedulePuller from "./pullers/eecs-draft-schedule";
+import enrollmentFromAwsPuller from "./pullers/enrollment-from-aws";
 import enrollmentFromPublicBackupPuller from "./pullers/enrollment-from-public-backup";
 import enrollmentHistoriesPuller from "./pullers/enrollment";
 import enrollmentTimeframePuller from "./pullers/enrollment-timeframe";
@@ -52,6 +53,7 @@ const pullerMap: {
   "grades-last-five-years": gradeDistributionsPuller.lastFiveYearsTerms,
   enrollments: enrollmentHistoriesPuller.updateEnrollmentHistories,
   "enrollment-timeframe": enrollmentTimeframePuller.syncEnrollmentTimeframe,
+  "enrollment-from-aws": enrollmentFromAwsPuller.syncEnrollmentFromAws,
   "enrollment-from-public-backup":
     enrollmentFromPublicBackupPuller.syncEnrollmentFromPublicBackup,
   "eecs-draft-schedule": eecsDraftSchedulePuller.syncEecsDraftSchedule,

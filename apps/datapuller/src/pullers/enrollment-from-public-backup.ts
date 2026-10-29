@@ -20,6 +20,7 @@ import {
 } from "../lib/eecsTimeUserBackup";
 import { syncDraftSchedules } from "../lib/draft-schedule";
 import { syncCrosslistingEnrollmentFanout } from "./crosslisting-enrollment-fanout";
+import { enrollmentWorkerEnabled } from "./enrollment-from-aws";
 import { rebuildCourseGradeSummaries } from "./grade-distributions";
 
 const PUBLIC_BACKUP_BASE =
@@ -67,6 +68,7 @@ const NS_EXCLUDE = [
   // Local job bookkeeping
   "bt.enrollment_backup_sync_statuses",
   "bt.draft_schedule_snapshots",
+  "bt.enrollment_worker_syncs",
   "bt.ucb_enrollment_scrape_statuses",
   // Auth / schedule identity — not migrated from public dump; protect local
   "bt.users",
@@ -372,13 +374,19 @@ const mergePublicBackup = async (
   mongoUri: string,
   log: Config["log"]
 ) => {
+  // With the AWS enrollment worker running, local enrollment history is
+  // fresher than Berkeleytime's backup; keep it (catalog seat counts are
+  // re-derived from it after the merge).
+  const excludes = enrollmentWorkerEnabled()
+    ? [...NS_EXCLUDE, "bt.enrollmenthistories"]
+    : [...NS_EXCLUDE];
   const args = [
     `--uri=${mongoToolsUri(mongoUri)}`,
     "--gzip",
     `--archive=${archivePath}`,
     "--drop",
     "--nsInclude=bt.*",
-    ...NS_EXCLUDE.flatMap((ns) => ["--nsExclude", ns]),
+    ...excludes.flatMap((ns) => ["--nsExclude", ns]),
   ];
   log.info(
     "Restoring public backup into local DB (--drop collections in archive; skip excluded namespaces)"

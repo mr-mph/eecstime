@@ -1,0 +1,164 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  EECStime enrollment worker. A Lambda polls classes.berkeley.edu (rate-capped)
+  every 5 minutes and writes enrollment batches to S3; the datapuller publishes
+  the class manifest and imports the batches. See src/handler.ts.
+
+Parameters:
+  MaxRequestsPerSecond:
+    Type: Number
+    Default: 1
+    Description: Hard cap on requests per second to classes.berkeley.edu.
+  MemorySize:
+    Type: Number
+    Default: 128
+  ReserveConcurrency:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Pin the function to 1 concurrent execution (belt-and-braces against
+      overlapping runs). Requires an account concurrency limit above 10.
+
+Conditions:
+  Reserve: !Equals [!Ref ReserveConcurrency, "true"]
+
+Resources:
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub eecstime-enrollment-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-results
+            Status: Enabled
+            Prefix: results/
+            ExpirationInDays: 3
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/eecstime-enrollment-worker
+      RetentionInDays: 7
+
+  FunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: worker
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub ${Bucket.Arn}/*
+              # Lets GetObject on a missing key return NoSuchKey, not 403.
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt Bucket.Arn
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub ${LogGroup.Arn}
+
+  Function:
+    Type: AWS::Lambda::Function
+    DependsOn: LogGroup
+    Properties:
+      FunctionName: eecstime-enrollment-worker
+      Runtime: nodejs22.x
+      Architectures: [arm64]
+      Handler: index.handler
+      MemorySize: !Ref MemorySize
+      Timeout: 295
+      ReservedConcurrentExecutions: !If [Reserve, 1, !Ref AWS::NoValue]
+      Role: !GetAtt FunctionRole.Arn
+      LoggingConfig:
+        LogGroup: !Ref LogGroup
+      Environment:
+        Variables:
+          BUCKET: !Ref Bucket
+          MAX_REQUESTS_PER_SECOND: !Ref MaxRequestsPerSecond
+          RUN_BUDGET_MS: "270000"
+      # Placeholder; deploy.sh uploads the real bundle with update-function-code.
+      Code:
+        ZipFile: |
+          exports.handler = async () => console.log("placeholder: run deploy.sh");
+
+  FunctionEventInvokeConfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      FunctionName: !Ref Function
+      Qualifier: $LATEST
+      MaximumRetryAttempts: 0
+
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: scheduler.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: invoke
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt Function.Arn
+
+  Schedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: eecstime-enrollment-worker
+      ScheduleExpression: rate(5 minutes)
+      FlexibleTimeWindow: { Mode: "OFF" }
+      Target:
+        Arn: !GetAtt Function.Arn
+        RoleArn: !GetAtt SchedulerRole.Arn
+        RetryPolicy:
+          MaximumRetryAttempts: 0
+
+  # Identity the datapuller uses: publish the manifest, read result batches.
+  SyncUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: eecstime-enrollment-sync
+      Policies:
+        - PolicyName: enrollment-sync
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub ${Bucket.Arn}/manifest/*
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub ${Bucket.Arn}/results/*
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt Bucket.Arn
+                Condition:
+                  StringLike:
+                    s3:prefix: ["results/*"]
+
+Outputs:
+  BucketName:
+    Value: !Ref Bucket
+  FunctionName:
+    Value: !Ref Function
+  SyncUserName:
+    Value: !Ref SyncUser
