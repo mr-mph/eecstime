@@ -47,6 +47,11 @@ import { getCurrentCatalogTerm } from "../shared/term-selectors";
 import { invalidateBackendCaches } from "./enrollment-from-public-backup";
 
 const MANIFEST_MAX_AGE_MS = 60 * 60_000;
+/**
+ * Bump when buildManifest's rules change, so a restarted datapuller
+ * republishes right away instead of waiting out MANIFEST_MAX_AGE_MS.
+ */
+const MANIFEST_RULES_VERSION = 2;
 /** Cross-listing pages to fall back on when the primary listing is 0/0. */
 const MAX_URLS_PER_CLASS = 3;
 
@@ -92,6 +97,8 @@ interface IEnrollmentWorkerSync {
   manifestClassCount?: number;
   /** "2027 Spring": the term the published manifest covers. */
   manifestTerm?: string | null;
+  /** MANIFEST_RULES_VERSION of the published manifest. */
+  manifestRulesVersion?: number | null;
 }
 
 const EnrollmentWorkerSyncModel = model<IEnrollmentWorkerSync>(
@@ -102,6 +109,7 @@ const EnrollmentWorkerSyncModel = model<IEnrollmentWorkerSync>(
     manifestPublishedAt: { type: Date, default: null },
     manifestClassCount: { type: Number },
     manifestTerm: { type: String, default: null },
+    manifestRulesVersion: { type: Number, default: null },
   })
 );
 
@@ -311,8 +319,14 @@ const publishManifestIfStale = async (
   const age = status?.manifestPublishedAt
     ? Date.now() - new Date(status.manifestPublishedAt).getTime()
     : Number.POSITIVE_INFINITY;
-  // Republish hourly, or right away when the target term changes.
-  if (age < MANIFEST_MAX_AGE_MS && status?.manifestTerm === termName) return;
+  // Republish hourly, or right away when the term or the rules change.
+  if (
+    age < MANIFEST_MAX_AGE_MS &&
+    status?.manifestTerm === termName &&
+    status?.manifestRulesVersion === MANIFEST_RULES_VERSION
+  ) {
+    return;
+  }
 
   const manifest = await buildManifest(log, term);
   if (!manifest.classes.length) {
@@ -335,6 +349,7 @@ const publishManifestIfStale = async (
         manifestPublishedAt: new Date(),
         manifestClassCount: manifest.classes.length,
         manifestTerm: termName,
+        manifestRulesVersion: MANIFEST_RULES_VERSION,
       },
     },
     { upsert: true }

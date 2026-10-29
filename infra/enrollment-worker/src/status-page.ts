@@ -199,7 +199,7 @@ function render() {
         "</td><td>" + dur(e.ms) + '</td><td class="muted">' + ago(e.at) + "</td></tr>").join("")
     : '<tr><td class="empty">No errors recorded.</td></tr>';
 
-  $("tiers").innerHTML = "<tr><th>Tier</th><th>Classes</th><th>Fetched</th><th>Median age</th><th title="Older than the tier's slowest refresh">Overdue</th></tr>" +
+  $("tiers").innerHTML = "<tr><th>Tier</th><th>Classes</th><th>Fetched</th><th>Median age</th><th title=\'Not updated within its tier&#39;s slowest refresh\'>Overdue</th></tr>" +
     summary.tiers.map((tr) => '<tr><td class="wrap">' + esc(tr.name) + "</td><td>" + fmtNum(tr.total) + "</td><td>" + fmtNum(tr.fetched) +
       "</td><td>" + dur(tr.medianAgeMs) + '</td><td class="' + (tr.overdue ? "warn" : "") + '">' + fmtNum(tr.overdue) + "</td></tr>").join("");
 

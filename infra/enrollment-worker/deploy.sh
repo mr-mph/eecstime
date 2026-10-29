@@ -50,6 +50,13 @@ bundle() { # <entry> <name>
   (cd "$OUT/$2" && zip -q ../$2.zip index.js)
 }
 
+echo "==> Checking the dashboard page's script parses"
+npx tsx -e '
+import { DASHBOARD_HTML } from "./infra/enrollment-worker/src/status-page.ts";
+const js = DASHBOARD_HTML.slice(DASHBOARD_HTML.indexOf("<script>") + 8, DASHBOARD_HTML.lastIndexOf("</script>"));
+new Function(js);
+'
+
 echo "==> Bundling worker + status dashboard"
 rm -rf "$OUT" && mkdir -p "$OUT"
 bundle handler.ts worker
