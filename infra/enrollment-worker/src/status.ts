@@ -68,6 +68,8 @@ const median = (values: number[]) => {
 };
 
 let cachedSummary: { at: number; value: unknown } | null = null;
+/** Class id -> its own catalog page, for events recorded without a URL. */
+let pageById = new Map<string, string>();
 
 const buildSummary = async () => {
   if (cachedSummary && Date.now() - cachedSummary.at < SUMMARY_TTL_MS) {
@@ -79,6 +81,7 @@ const buildSummary = async () => {
   ])) as [EnrollmentWorkerManifest | null, SchedulerState | null];
   const now = Date.now();
   const classes = manifest?.classes ?? [];
+  pageById = new Map(classes.map((c) => [c.id, c.urls[0]]));
   const states = state?.classes ?? {};
 
   const windows = [
@@ -162,7 +165,16 @@ export const handler = async (event: FunctionUrlEvent) => {
         live: live && {
           ...live,
           inFlight: live.inFlight.map((f) => ({ ...f, label: label(f.id) })),
-          recent: live.recent.map((r) => ({ ...r, label: label(r.id) })),
+          recent: live.recent.map((r) => ({
+            ...r,
+            url: r.url ?? pageById.get(r.id),
+            label: label(r.id),
+          })),
+          errors: (live.errors ?? []).map((r) => ({
+            ...r,
+            url: r.url ?? pageById.get(r.id),
+            label: r.id === "run" ? "Whole run" : label(r.id),
+          })),
         },
         summary,
       }),

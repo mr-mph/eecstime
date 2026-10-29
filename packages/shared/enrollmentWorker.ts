@@ -112,6 +112,8 @@ export type EnrollmentWorkerRunSummary = {
 
 export type EnrollmentWorkerFetchEvent = {
   id: string;
+  /** Page that served the numbers (or the first page tried, on failure). */
+  url?: string;
   /** Epoch ms the worker finished this class. */
   at: number;
   ok: boolean;
@@ -147,4 +149,6 @@ export type EnrollmentWorkerLiveStatus = {
   inFlight: { id: string; url: string; startedAt: number; timeoutMs: number }[];
   /** Newest first. */
   recent: EnrollmentWorkerFetchEvent[];
+  /** Failures and throttling, newest first, kept across runs. */
+  errors: EnrollmentWorkerFetchEvent[];
 };

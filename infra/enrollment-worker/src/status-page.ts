@@ -56,6 +56,8 @@ export const DASHBOARD_HTML = /* html */ `<!doctype html>
     overflow: hidden; margin-top: 6px; }
   .progress > span { position: absolute; inset: 0 auto 0 0; background: var(--accent); }
   .empty { color: var(--muted); padding: 8px 0; }
+  a.cls { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  a.cls:hover { color: var(--accent); border-bottom-color: var(--accent); }
   .section { margin-top: 12px; }
 </style>
 </head>
@@ -87,6 +89,11 @@ export const DASHBOARD_HTML = /* html */ `<!doctype html>
     <div class="scroll"><table id="recent"></table></div>
   </div>
 
+  <div class="card section">
+    <h2>Recent errors <span id="errSummary" style="text-transform:none;letter-spacing:0;font-weight:400"></span></h2>
+    <div class="scroll"><table id="errors"></table></div>
+  </div>
+
   <div class="grid two section">
     <div class="card">
       <h2>By popularity tier</h2>
@@ -115,6 +122,11 @@ const dur = (ms) => {
 };
 const ago = (t) => (t ? dur(now() - t) + " ago" : "—");
 const now = () => Date.now() + offset;
+// Class name linking to its classes.berkeley.edu page (opens in a new tab).
+const classLink = (label, url) =>
+  String(url ?? "").startsWith("https://classes.berkeley.edu/")
+    ? '<a class="cls" href="' + esc(url) + '" target="_blank" rel="noopener">' + esc(label) + "</a>"
+    : esc(label);
 const clock = (t) => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
 
 function render() {
@@ -153,7 +165,7 @@ function render() {
         .sort((a, b) => a.startedAt - b.startedAt)
         .map((f) => {
           const w = t - f.startedAt;
-          return "<tr><td>" + esc(f.label) + '</td><td class="' + (w > f.timeoutMs * 0.75 ? "warn" : "") + '">' + dur(w) +
+          return "<tr><td>" + classLink(f.label, f.url) + '</td><td class="' + (w > f.timeoutMs * 0.75 ? "warn" : "") + '">' + dur(w) +
             '</td><td class="muted">' + dur(f.timeoutMs) + "</td></tr>";
         }).join("")
     : '<tr><td class="empty">' + (state === "running" ? "Between classes…" : "Nothing in flight; the worker runs every 5 minutes.") + "</td></tr>";
@@ -163,19 +175,28 @@ function render() {
     '<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between"><span>Within ' + esc(w.label) +
     "</span><span>" + fmtNum(w.count) + ' <span class="muted">/ ' + fmtNum(summary.totalClasses) + '</span></span></div><div class="bar"><span style="width:' +
     (100 * w.count / total).toFixed(2) + '%"></span></div></div>').join("") +
-    (summary.retryPending ? '<div class="warn">' + fmtNum(summary.retryPending) + " popular class(es) queued for a longer-timeout retry</div>" : "") +
+    (summary.retryPending ? '<div class="warn">' + fmtNum(summary.retryPending) + " class(es) queued to retry first next run (couldn't reach the page)</div>" : "") +
     (run && run.state === "running" ? '<div class="muted" style="margin-top:6px">Run progress</div><div class="progress"><span style="width:' +
       Math.min(100, 100 * elapsed / (run.budgetEndsAt - run.startedAt)).toFixed(1) + '%"></span></div>' : "");
 
   const recent = live?.recent ?? [];
   $("recent").innerHTML = recent.length
     ? "<tr><th>Class</th><th>Result</th><th>Enrolled</th><th>Waitlist</th><th>Took</th><th>Finished</th></tr>" + recent.slice(0, 30).map((r) =>
-        "<tr><td>" + esc(r.label) + (r.followers ? ' <span class="muted">+' + r.followers + " cross-listing" + (r.followers > 1 ? "s" : "") + "</span>" : "") +
+        "<tr><td>" + classLink(r.label, r.url) + (r.followers ? ' <span class="muted">+' + r.followers + " cross-listing" + (r.followers > 1 ? "s" : "") + "</span>" : "") +
         "</td><td class=\\"" + (r.ok ? (r.changed ? "ok" : "") : "bad") + ' wrap">' +
         (r.ok ? (r.changed ? "changed" : "no change") : esc(r.error ?? "failed")) + "</td><td>" +
         (r.ok ? fmtNum(r.enrolled) + " / " + fmtNum(r.max) : "—") + "</td><td>" + (r.ok ? fmtNum(r.waitlisted) : "—") +
         "</td><td>" + dur(r.ms) + '</td><td class="muted">' + ago(r.at) + "</td></tr>").join("")
     : '<tr><td class="empty">No fetches recorded yet.</td></tr>';
+
+  const errs = live?.errors ?? [];
+  const lastHour = errs.filter((e) => t - e.at <= 3600_000).length;
+  $("errSummary").textContent = errs.length ? "· " + lastHour + " in the last hour" : "";
+  $("errors").innerHTML = errs.length
+    ? "<tr><th>Class</th><th>Error</th><th>Took</th><th>When</th></tr>" + errs.slice(0, 50).map((e) =>
+        "<tr><td>" + classLink(e.label, e.url) + '</td><td class="bad wrap">' + esc(e.error ?? "failed") +
+        "</td><td>" + dur(e.ms) + '</td><td class="muted">' + ago(e.at) + "</td></tr>").join("")
+    : '<tr><td class="empty">No errors recorded.</td></tr>';
 
   $("tiers").innerHTML = "<tr><th>Tier</th><th>Classes</th><th>Fetched</th><th>Median age</th><th>Overdue</th></tr>" +
     summary.tiers.map((tr) => '<tr><td class="wrap">' + esc(tr.name) + "</td><td>" + fmtNum(tr.total) + "</td><td>" + fmtNum(tr.fetched) +

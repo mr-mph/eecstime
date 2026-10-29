@@ -57,15 +57,20 @@ const UNCHANGED_BACKOFF = 1.5;
 const FAILURE_BACKOFF = 2;
 /** Re-check a cross-listing follower's own page this often. */
 const FOLLOWER_RECHECK_MS = 24 * 60 * 60_000;
-/** Classes whose fastest refresh is at most this count as popular. */
-const POPULAR_MAX_MIN_INTERVAL_SEC = 30 * 60;
-/** Longer timeouts for successive retries of a popular class that timed out. */
+/**
+ * Couldn't reach the page (network error, timeout, 5xx): retry first thing
+ * next run, at most this many times, with these timeouts if it timed out.
+ * Pages that answered but had no usable data back off instead.
+ */
 const RETRY_TIMEOUTS_MS = [45_000, 60_000];
 /** Never start a request that could run past this point (Lambda timeout 295s). */
 const SAFE_END_MS = 285_000;
 /** Dashboard live-status write interval. */
 const LIVE_STATUS_EVERY_MS = 10_000;
 const LIVE_RECENT = 60;
+const ERROR_HISTORY = 100;
+/** Pseudo class id for run-level events (throttling). */
+const RUN_EVENT_ID = "run";
 const RUN_HISTORY = 48;
 const USER_AGENT =
   process.env.USER_AGENT ??
@@ -86,8 +91,9 @@ type ClassState = {
    */
   via?: string;
   viaCheckedAt?: number;
-  /** A popular class timed out: retry it first next run with this timeout. */
+  /** Couldn't reach the page: retry it first next run with this timeout. */
   retryTimeoutMs?: number;
+  /** Consecutive quick retries used (see RETRY_TIMEOUTS_MS). */
   timeoutRetries?: number;
   /** Epoch ms of the last successful fetch. */
   okAt?: number;
@@ -99,6 +105,8 @@ type SchedulerState = {
   classes: Record<string, ClassState>;
   /** Recent run summaries, newest last (for the dashboard). */
   runs?: EnrollmentWorkerRunSummary[];
+  /** Recent failures, newest first (for the dashboard). */
+  errors?: EnrollmentWorkerFetchEvent[];
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -179,6 +187,15 @@ const isTimeout = (error: unknown) =>
   error instanceof Error && /timeout|timed out/i.test(error.message);
 
 /**
+ * The page couldn't be reached (network error, timeout, server error), as
+ * opposed to a page that answered without usable enrollment data (404,
+ * missing/blank numbers, unparseable), which retrying soon won't fix.
+ */
+const isUnreachable = (error: unknown) =>
+  error instanceof Error &&
+  /Failed to reach|Timed out reading|returned HTTP 5\d\d|timeout/i.test(error.message);
+
+/**
  * Group cross-listings: a class whose numbers come from another manifest
  * class's page (state.via) follows that class instead of being fetched.
  * The leader inherits the fastest refresh of its group.
@@ -220,7 +237,7 @@ const isBacklog = (s: ClassState | undefined) => !s || (!s.hash && !s.okAt && !s
 
 /**
  * Classes to fetch this run, in order:
- *  1. popular classes retrying a timeout (longer timeout);
+ *  1. classes whose page couldn't be reached last run (quick retry);
  *  2. the backlog: every class never attempted, most popular first (the
  *     manifest is sorted by popularity), so each class gets at least one
  *     fetch as soon as possible;
@@ -293,6 +310,7 @@ export const handler = async () => {
       },
       inFlight: [],
       recent: [],
+      errors: state.errors ?? [],
     } satisfies EnrollmentWorkerLiveStatus);
     return;
   }
@@ -342,6 +360,7 @@ export const handler = async () => {
       ? [knownVia, ...c.urls.filter((u) => u !== knownVia)]
       : c.urls;
     let timedOut = false;
+    let unreachable = false;
     let error: string | undefined;
     for (const url of urls) {
       if (throttled) break;
@@ -359,16 +378,17 @@ export const handler = async () => {
           timeoutMs,
         });
         if (!isBlankUcbEnrollment(data.primary)) {
-          return { data, url, timedOut, pageGeneratedAt, error };
+          return { data, url, timedOut, unreachable, pageGeneratedAt, error };
         }
         error = "page has no enrollment numbers";
       } catch (err) {
         // Try the next cross-listing; persistent failures back off below.
         if (isTimeout(err)) timedOut = true;
+        if (isUnreachable(err)) unreachable = true;
         error = err instanceof Error ? err.message : String(err);
       }
     }
-    return { data: null, url: null, timedOut, pageGeneratedAt: null, error };
+    return { data: null, url: null, timedOut, unreachable, pageGeneratedAt: null, error };
   };
 
   let pending: EnrollmentWorkerResult[] = [];
@@ -427,9 +447,14 @@ export const handler = async () => {
     { id: string; url: string; startedAt: number; timeoutMs: number }
   >();
   const recent: EnrollmentWorkerFetchEvent[] = [];
+  const errors: EnrollmentWorkerFetchEvent[] = [...(state.errors ?? [])];
   const record = (event: EnrollmentWorkerFetchEvent) => {
     recent.unshift(event);
     if (recent.length > LIVE_RECENT) recent.length = LIVE_RECENT;
+    if (!event.ok) {
+      errors.unshift(event);
+      if (errors.length > ERROR_HISTORY) errors.length = ERROR_HISTORY;
+    }
   };
   let finishedAt: number | null = null;
   const liveStatus = (): EnrollmentWorkerLiveStatus => ({
@@ -451,6 +476,7 @@ export const handler = async () => {
     },
     inFlight: [...inFlightClasses.values()],
     recent,
+    errors,
   });
   let liveWrite: Promise<unknown> = Promise.resolve();
   const writeLive = () =>
@@ -484,7 +510,7 @@ export const handler = async () => {
       startedAt: classStarted,
       timeoutMs,
     });
-    const { data, url, timedOut, pageGeneratedAt, error } = await fetchClass(
+    const { data, url, timedOut, unreachable, pageGeneratedAt, error } = await fetchClass(
       c,
       timeoutMs,
       viaFresh ? prev!.via : undefined
@@ -532,6 +558,7 @@ export const handler = async () => {
       if (didChange) changed += 1;
       record({
         id: c.id,
+        url,
         at: fetchedAt,
         ok: true,
         observedAt,
@@ -544,30 +571,29 @@ export const handler = async () => {
       });
     } else if (!throttled) {
       const retries = prev?.timeoutRetries ?? 0;
-      const retryPopular =
-        timedOut &&
-        minInterval <= POPULAR_MAX_MIN_INTERVAL_SEC &&
-        retries < RETRY_TIMEOUTS_MS.length;
+      const quickRetry = unreachable && retries < RETRY_TIMEOUTS_MS.length;
+      const retryTimeout = timedOut ? RETRY_TIMEOUTS_MS[retries] : REQUEST_TIMEOUT_MS;
       state.classes[c.id] = {
         ...prev,
         last: fetchedAt,
-        // Popular + timed out: keep the interval and jump the queue next run
-        // with a longer timeout. Otherwise back off.
-        intervalSec: retryPopular
+        // Unreachable: keep the interval and jump the queue next run (with a
+        // longer timeout if it timed out). Bad/blank page: back off.
+        intervalSec: quickRetry
           ? interval
           : clamp(interval * FAILURE_BACKOFF, minInterval, c.maxIntervalSec),
         fails: (prev?.fails ?? 0) + 1,
-        retryTimeoutMs: retryPopular ? RETRY_TIMEOUTS_MS[retries] : undefined,
-        timeoutRetries: retryPopular ? retries + 1 : undefined,
+        retryTimeoutMs: quickRetry ? retryTimeout : undefined,
+        timeoutRetries: quickRetry ? retries + 1 : undefined,
       };
       failed += 1;
       record({
         id: c.id,
+        url: viaFresh ? prev!.via : c.urls[0],
         at: fetchedAt,
         ok: false,
-        error: retryPopular
-          ? `${error ?? "failed"} (retrying first next run, ${RETRY_TIMEOUTS_MS[retries] / 1000}s timeout)`
-          : error,
+        error: quickRetry
+          ? `${error ?? "failed"} (retrying first next run${timedOut ? `, ${retryTimeout / 1000}s timeout` : ""})`
+          : `${error ?? "failed"} (backing off)`,
         ms: fetchedAt - classStarted,
       });
     }
@@ -589,8 +615,19 @@ export const handler = async () => {
 
   await flush();
 
-  if (throttled) state.pausedUntil = Date.now() + THROTTLE_PAUSE_MS;
-  else delete state.pausedUntil;
+  if (throttled) {
+    state.pausedUntil = Date.now() + THROTTLE_PAUSE_MS;
+    record({
+      id: RUN_EVENT_ID,
+      at: Date.now(),
+      ok: false,
+      error: `classes.berkeley.edu returned 429/503; pausing until ${new Date(state.pausedUntil).toISOString()}`,
+      ms: Date.now() - started,
+    });
+  } else {
+    delete state.pausedUntil;
+  }
+  state.errors = errors;
   const seconds = (Date.now() - started) / 1000;
   const summary: EnrollmentWorkerRunSummary = {
     startedAt: new Date(started).toISOString(),
