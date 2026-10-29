@@ -11,7 +11,7 @@ Parameters:
     Description: Hard cap on requests per second to classes.berkeley.edu.
   MemorySize:
     Type: Number
-    Default: 128
+    Default: 192
   ReserveConcurrency:
     Type: String
     Default: "false"

@@ -9,6 +9,7 @@
 #    ENROLLMENT_WORKER_* settings into the repo's .env for the datapuller
 #
 # Env overrides: AWS_REGION (default us-west-2), MAX_RPS (default 1),
+# MEMORY_MB (default 192),
 # RESERVE_CONCURRENCY (default false; needs an account limit above 10).
 set -euo pipefail
 
@@ -25,6 +26,7 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
     "MaxRequestsPerSecond=${MAX_RPS:-1}" \
+    "MemorySize=${MEMORY_MB:-192}" \
     "ReserveConcurrency=${RESERVE_CONCURRENCY:-false}" \
   --no-fail-on-empty-changeset
 
