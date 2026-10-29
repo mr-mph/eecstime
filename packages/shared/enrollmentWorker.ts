@@ -25,6 +25,14 @@ export type EnrollmentWorkerClass = {
   id: string;
   /** Catalog URLs to try in order (primary listing, then cross-listings). */
   urls: string[];
+  /** Dashboard label for the priority group this class is in. */
+  tier?: string;
+  /**
+   * Whether the class has labs/discussions worth fetching from the
+   * associated-sections page (default true). Skipping it halves the requests
+   * for lecture-only classes.
+   */
+  associated?: boolean;
   /** Fastest refresh allowed (popular classes get a small value). */
   minIntervalSec: number;
   /** Slowest refresh once a class has stopped changing. */
@@ -108,6 +116,8 @@ export type EnrollmentWorkerRunSummary = {
   maxInFlight: number;
   requestsPerSecond: number;
   throttled: boolean;
+  /** Concurrency limit at the end of the run (adaptive). */
+  concurrency?: number;
 };
 
 export type EnrollmentWorkerFetchEvent = {

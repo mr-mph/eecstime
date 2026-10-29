@@ -43,14 +43,30 @@ import {
 } from "../../../packages/shared/ucbCatalogEnrollment";
 
 const BUCKET = process.env.BUCKET ?? "";
-const MAX_RPS = Number(process.env.MAX_REQUESTS_PER_SECOND ?? "1");
+const MAX_RPS = Number(process.env.MAX_REQUESTS_PER_SECOND ?? "3");
 const RUN_BUDGET_MS = Number(process.env.RUN_BUDGET_MS ?? "270000");
 const REQUEST_TIMEOUT_MS = 20_000;
 /**
- * Classes fetched at once. The pacer still spaces request *starts* >= 1/MAX_RPS
- * apart; concurrency only stops a slow page from idling the budget.
+ * Classes fetched at once, adapted while running: every ADAPT_EVERY_MS the
+ * limit grows by ADAPT_STEP while requests are healthy (few timeouts/5xx,
+ * latency near the best seen) and is cut by ADAPT_CUT when they aren't. The
+ * limit carries over between runs. The pacer still spaces request starts at
+ * least 1/MAX_RPS apart, and a 429/503 still stops the run.
  */
-const CONCURRENCY = Number(process.env.CONCURRENCY ?? "8");
+const CONCURRENCY_START = Number(process.env.CONCURRENCY ?? "8");
+const CONCURRENCY_MIN = 2;
+const CONCURRENCY_MAX = Number(process.env.MAX_CONCURRENCY ?? "24");
+const ADAPT_EVERY_MS = Number(process.env.ADAPT_EVERY_MS ?? "30000");
+const ADAPT_MIN_SAMPLES = 10;
+const ADAPT_STEP = 2;
+const ADAPT_CUT = 0.6;
+/** Grow while at most this share of requests fail (network, timeout, 5xx)... */
+const ADAPT_OK_FAIL_RATE = 0.1;
+/** ...and median latency stays within this factor of the best seen. */
+const ADAPT_OK_LATENCY = 1.5;
+/** Cut when failures or latency pass these. */
+const ADAPT_BAD_FAIL_RATE = 0.2;
+const ADAPT_BAD_LATENCY = 2.5;
 const FLUSH_EVERY_MS = 60_000;
 const THROTTLE_PAUSE_MS = 15 * 60_000;
 const UNCHANGED_BACKOFF = 1.5;
@@ -107,6 +123,10 @@ type SchedulerState = {
   runs?: EnrollmentWorkerRunSummary[];
   /** Recent failures, newest first (for the dashboard). */
   errors?: EnrollmentWorkerFetchEvent[];
+  /** Adaptive concurrency limit carried between runs. */
+  concurrency?: number;
+  /** Best (lowest) median request latency seen, drifting slowly upward. */
+  originLatencyBaselineMs?: number;
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -162,23 +182,6 @@ const enrollmentHash = (data: ParsedUcbCatalogEnrollment) =>
       )
     )
     .digest("base64url");
-
-/**
- * classes.berkeley.edu sits behind a CDN that caches pages for up to 15
- * minutes, so the numbers can be older than our request. Last-Modified is
- * when Drupal rendered the page; fall back to Date - Age, then to now.
- */
-const generatedAt = (response: Response): number => {
-  const now = Date.now();
-  const lastModified = Date.parse(response.headers.get("last-modified") ?? "");
-  if (Number.isFinite(lastModified)) return Math.min(lastModified, now);
-  const date = Date.parse(response.headers.get("date") ?? "");
-  const age = Number(response.headers.get("age") ?? "0");
-  if (Number.isFinite(date)) {
-    return Math.min(date - (Number.isFinite(age) ? age : 0) * 1000, now);
-  }
-  return now;
-};
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
@@ -305,7 +308,7 @@ export const handler = async () => {
         changed: 0,
         failed: 0,
         requests: 0,
-        concurrency: CONCURRENCY,
+        concurrency: state.concurrency ?? CONCURRENCY_START,
         maxRequestsPerSecond: MAX_RPS,
       },
       inFlight: [],
@@ -333,17 +336,66 @@ export const handler = async () => {
   let throttled = false;
   let inFlight = 0;
   let maxInFlight = 0;
+  // Adaptive concurrency: request outcomes since the last adjustment.
+  let limit = clamp(
+    Math.round(state.concurrency ?? CONCURRENCY_START),
+    CONCURRENCY_MIN,
+    CONCURRENCY_MAX
+  );
+  // `cached`: served by the CDN (fast regardless of how loaded the origin is),
+  // so it counts toward the failure rate but not the latency check.
+  let samples: { ms: number; ok: boolean; cached: boolean }[] = [];
   const pacedFetch: typeof fetch = async (input, init) => {
     await acquireSlot();
     requests += 1;
     inFlight += 1;
     maxInFlight = Math.max(maxInFlight, inFlight);
+    const t0 = Date.now();
     try {
       const response = await fetch(input, init);
       if (response.status === 429 || response.status === 503) throttled = true;
+      samples.push({
+        ms: Date.now() - t0,
+        ok: response.status < 500,
+        // e.g. "MISS, MISS, HIT" — any HIT means a CDN layer answered.
+        cached: /\bHIT\b/i.test(response.headers.get("x-cache") ?? ""),
+      });
       return response;
+    } catch (error) {
+      samples.push({ ms: Date.now() - t0, ok: false, cached: false });
+      throw error;
     } finally {
       inFlight -= 1;
+    }
+  };
+  const adapt = () => {
+    if (samples.length < ADAPT_MIN_SAMPLES) return;
+    const failRate = samples.filter((s) => !s.ok).length / samples.length;
+    // Latency is judged on uncached (origin) responses only.
+    const originMs = samples
+      .filter((s) => s.ok && !s.cached)
+      .map((s) => s.ms)
+      .sort((a, b) => a - b);
+    const median =
+      originMs.length >= 3 ? originMs[Math.floor(originMs.length / 2)] : null;
+    samples = [];
+    if (median !== null) {
+      // Drift up slowly so a site that's slower overall isn't penalized forever.
+      state.originLatencyBaselineMs = Math.min(median, (state.originLatencyBaselineMs ?? median) * 1.02);
+    }
+    const baseline = state.originLatencyBaselineMs ?? median ?? 0;
+    const slow = median !== null && median > baseline * ADAPT_BAD_LATENCY;
+    const fast = median === null || median <= baseline * ADAPT_OK_LATENCY;
+    const before = limit;
+    if (failRate > ADAPT_BAD_FAIL_RATE || slow) {
+      limit = Math.max(CONCURRENCY_MIN, Math.floor(limit * ADAPT_CUT));
+    } else if (failRate <= ADAPT_OK_FAIL_RATE && fast) {
+      limit = Math.min(CONCURRENCY_MAX, limit + ADAPT_STEP);
+    }
+    if (limit !== before) {
+      console.log(
+        `concurrency ${before} -> ${limit} (fail ${(failRate * 100).toFixed(0)}%, origin median ${median ?? "n/a"}ms, baseline ${Math.round(baseline)}ms)`
+      );
     }
   };
 
@@ -364,21 +416,22 @@ export const handler = async () => {
     let error: string | undefined;
     for (const url of urls) {
       if (throttled) break;
-      // When this attempt's class page (its first request) was generated.
-      let pageGeneratedAt: number | null = null;
-      const attemptFetch: typeof fetch = async (input, init) => {
-        const response = await pacedFetch(input, init);
-        pageGeneratedAt ??= generatedAt(response);
-        return response;
-      };
       try {
         const data = await fetchUcbCatalogEnrollment(url, {
-          fetch: attemptFetch,
+          fetch: pacedFetch,
           userAgent: USER_AGENT,
           timeoutMs,
+          associated: c.associated !== false,
         });
         if (!isBlankUcbEnrollment(data.primary)) {
-          return { data, url, timedOut, unreachable, pageGeneratedAt, error };
+          return {
+            data,
+            url,
+            timedOut,
+            unreachable,
+            pageGeneratedAt: data.pageGeneratedAt ?? null,
+            error,
+          };
         }
         error = "page has no enrollment numbers";
       } catch (err) {
@@ -471,7 +524,7 @@ export const handler = async () => {
       changed,
       failed,
       requests,
-      concurrency: CONCURRENCY,
+      concurrency: limit,
       maxRequestsPerSecond: MAX_RPS,
     },
     inFlight: [...inFlightClasses.values()],
@@ -601,17 +654,26 @@ export const handler = async () => {
     if (Date.now() - lastFlush >= FLUSH_EVERY_MS) await flush();
   };
 
-  // Workers pull from one shared queue; JS is single-threaded, so the
-  // state/counter updates between awaits can't interleave mid-update.
+  // Keep up to `limit` classes in flight, re-reading the limit as it adapts.
+  // JS is single-threaded, so state/counter updates between awaits can't
+  // interleave mid-update.
+  const adaptTimer = setInterval(adapt, ADAPT_EVERY_MS);
+  const running = new Set<Promise<void>>();
   let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.max(1, CONCURRENCY) }, async () => {
-      while (next < queue.length) {
-        if (Date.now() >= started + RUN_BUDGET_MS || throttled) return;
-        await processClass(queue[next++]);
-      }
-    })
-  );
+  while (next < queue.length && Date.now() < started + RUN_BUDGET_MS && !throttled) {
+    if (running.size >= limit) {
+      await Promise.race(running);
+      continue;
+    }
+    const job: Promise<void> = processClass(queue[next++])
+      .catch((error) => console.warn("class failed unexpectedly", error))
+      .finally(() => running.delete(job));
+    running.add(job);
+  }
+  await Promise.all(running);
+  clearInterval(adaptTimer);
+  if (throttled) limit = Math.max(CONCURRENCY_MIN, Math.floor(limit / 2));
+  state.concurrency = limit;
 
   await flush();
 
@@ -641,6 +703,7 @@ export const handler = async () => {
     maxInFlight,
     requestsPerSecond: seconds ? Number((requests / seconds).toFixed(2)) : 0,
     throttled,
+    concurrency: limit,
   };
   state.runs = [...(state.runs ?? []), summary].slice(-RUN_HISTORY);
   // Drop classes that left the manifest so state stays bounded.

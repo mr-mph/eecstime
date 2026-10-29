@@ -54,12 +54,10 @@ export const classLabel = (id: string) => {
   return `${semester} ${year} ${subject} ${courseNumber} ${number}`;
 };
 
-const TIER_NAMES: Record<number, string> = {
-  900: "Top 100 (every 15 min)",
-  1800: "Top 500 (every 30 min)",
-  7200: "Top 2000 (every 2 h)",
-  21600: "Everything else (every 6 h)",
-};
+const span = (sec: number) => (sec < 3600 ? `${sec / 60} min` : `${sec / 3600} h`);
+/** Manifest tier label plus its refresh bounds, e.g. "... (15 min – 2 h)". */
+const tierLabel = (c: { tier?: string; minIntervalSec: number; maxIntervalSec: number }) =>
+  `${c.tier ?? "Classes"} (${span(c.minIntervalSec)} – ${span(c.maxIntervalSec)})`;
 
 const median = (values: number[]) => {
   if (!values.length) return null;
@@ -94,23 +92,30 @@ const buildSummary = async () => {
   let neverFetched = 0;
   let followers = 0;
   let retryPending = 0;
-  type Tier = { name: string; total: number; fetched: number; ages: number[]; overdue: number };
+  type Tier = {
+    name: string;
+    minIntervalSec: number;
+    total: number;
+    fetched: number;
+    ages: number[];
+    overdue: number;
+  };
   const tiers = new Map<string, Tier>();
 
   for (const c of classes) {
     const s = states[c.id];
     const okAt = s?.okAt ?? (s?.hash ? s.last : undefined);
-    const gated = c.maxIntervalSec >= 48 * 60 * 60;
-    const tierName = gated
-      ? "Grad / consent / no capacity (every 6 h+)"
-      : (TIER_NAMES[c.minIntervalSec] ?? `every ${Math.round(c.minIntervalSec / 60)} min`);
-    const tier = tiers.get(tierName) ?? { name: tierName, total: 0, fetched: 0, ages: [], overdue: 0 };
+    const tierName = tierLabel(c);
+    const tier =
+      tiers.get(tierName) ??
+      { name: tierName, minIntervalSec: c.minIntervalSec, total: 0, fetched: 0, ages: [], overdue: 0 };
     tier.total += 1;
     if (okAt) {
       const age = now - okAt;
       tier.fetched += 1;
       tier.ages.push(age);
-      if (age > 2 * c.minIntervalSec * 1000) tier.overdue += 1;
+      // Past its slowest refresh: the budget isn't keeping up.
+      if (age > c.maxIntervalSec * 1000) tier.overdue += 1;
       for (const w of updatedWithin) if (age <= w.ms) w.count += 1;
     } else {
       neverFetched += 1;
@@ -120,7 +125,6 @@ const buildSummary = async () => {
     if (s?.retryTimeoutMs) retryPending += 1;
   }
 
-  const tierOrder = [...Object.values(TIER_NAMES), "Grad / consent / no capacity (every 6 h+)"];
   const value = {
     manifestGeneratedAt: manifest?.generatedAt ?? null,
     totalClasses: classes.length,
@@ -129,7 +133,7 @@ const buildSummary = async () => {
     retryPending,
     updatedWithin: updatedWithin.map(({ label, count }) => ({ label, count })),
     tiers: [...tiers.values()]
-      .sort((a, b) => tierOrder.indexOf(a.name) - tierOrder.indexOf(b.name))
+      .sort((a, b) => a.minIntervalSec - b.minIntervalSec || a.name.localeCompare(b.name))
       .map((t) => ({
         name: t.name,
         total: t.total,

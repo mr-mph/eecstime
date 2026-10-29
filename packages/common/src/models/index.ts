@@ -11,6 +11,7 @@ export * from "./review";
 export * from "./grade-distribution";
 export * from "./plan";
 export * from "./enrollment-history";
+export * from "./enrollment-refresh-click";
 export * from "./curated-classes";
 export * from "./collection";
 export * from "./enrollment-timeframe";

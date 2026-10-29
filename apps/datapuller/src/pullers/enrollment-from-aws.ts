@@ -22,6 +22,7 @@ import { gunzipSync, gzipSync } from "node:zlib";
 
 import {
   CatalogClassModel,
+  EnrollmentRefreshClickModel,
   ISectionItem,
   SectionModel,
 } from "@repo/common/models";
@@ -51,22 +52,34 @@ const MAX_URLS_PER_CLASS = 3;
 const MIN = 60;
 const HOUR = 60 * MIN;
 /**
- * Fastest refresh by popularity rank (across all polled classes). The worker
- * stretches these when a class isn't changing, and stretches everything
- * proportionally if demand exceeds the 1 req/s budget.
+ * Refresh bounds by priority group. The worker resets a class to its group's
+ * fastest refresh whenever its numbers change and backs it off toward the
+ * slowest while they don't; if demand exceeds the request budget everything
+ * stretches proportionally. classes.berkeley.edu pages are CDN-cached for 15
+ * minutes, so polling faster than that only re-reads the same cached copy.
  */
-const POPULARITY_TIERS: { maxRank: number; minIntervalSec: number }[] = [
-  // classes.berkeley.edu pages are CDN-cached for 15 minutes; polling faster
-  // only re-reads the same cached copy.
-  { maxRank: 100, minIntervalSec: 15 * MIN },
-  { maxRank: 500, minIntervalSec: 30 * MIN },
-  { maxRank: 2000, minIntervalSec: 2 * HOUR },
-  { maxRank: Number.POSITIVE_INFINITY, minIntervalSec: 6 * HOUR },
-];
-const MAX_INTERVAL_SEC = 24 * HOUR;
-/** Grad, consent-gated or zero-capacity classes rarely move. */
-const GATED_MIN_INTERVAL_SEC = 6 * HOUR;
-const GATED_MAX_INTERVAL_SEC = 48 * HOUR;
+const GROUPS = {
+  hot: {
+    tier: "Hot: waitlisted, ≥90% full, most viewed or just refreshed",
+    minIntervalSec: 15 * MIN,
+    maxIntervalSec: 2 * HOUR,
+  },
+  undergrad: {
+    tier: "Undergrad: everything else",
+    minIntervalSec: 30 * MIN,
+    maxIntervalSec: 2 * HOUR,
+  },
+  grad: {
+    tier: "Grad / professional / no capacity",
+    minIntervalSec: 6 * HOUR,
+    maxIntervalSec: 24 * HOUR,
+  },
+} as const;
+/** Undergrad classes this high in views + ratings count as hot. */
+const HOT_BY_VIEWS = 300;
+/** A class whose refresh button was used this recently counts as hot. */
+const HOT_AFTER_REFRESH_MS = 6 * 60 * 60_000;
+const HOT_FILL_RATIO = 0.9;
 
 const SYNC_KEY = "enrollment-worker";
 
@@ -114,8 +127,18 @@ const popularityScore = (c: {
   0.5 * (c.viewCount ?? 0) +
   3 * (c.berkeleytimeRatingCount ?? 0);
 
-/** SIS consent codes: N = none, I = instructor, D = department. */
-const needsConsent = (code?: string) => code === "I" || code === "D";
+/**
+ * Independent study / research / field study: one section per instructor and
+ * nothing for anyone else to enroll in, so not worth polling. 98/198 (DeCals,
+ * group study) stay. Matches prefixes/suffixes like H199 or 299A.
+ */
+const INDEPENDENT_STUDY_NUMBERS = /^[A-Z]*(99|197|199|299|399|499|601|602)[A-Z]?$/;
+const isIndependentStudy = (courseNumber: string, component?: string) =>
+  component === "IND" || INDEPENDENT_STUDY_NUMBERS.test(courseNumber.toUpperCase());
+
+/** Numeric part of a catalog number: "C191A" -> 191. */
+const catalogLevel = (courseNumber: string) =>
+  Number(courseNumber.match(/\d+/)?.[0] ?? 0);
 
 const buildManifest = async (
   log: Config["log"],
@@ -124,114 +147,147 @@ const buildManifest = async (
   // Only the latest term with catalog data (the catalog's default term, e.g.
   // Spring 2027 once it's released). The term in session is past its
   // enrollment rush and not worth the requests.
-  const terms = [term];
+  const { year, semester } = term;
+  const [classes, sections, clicks] = await Promise.all([
+    CatalogClassModel.find({ year, semester })
+      .select({
+        sessionId: 1,
+        subject: 1,
+        courseNumber: 1,
+        number: 1,
+        enrolledCount: 1,
+        maxEnroll: 1,
+        waitlistedCount: 1,
+        viewCount: 1,
+        berkeleytimeRatingCount: 1,
+        enrollmentUpdatedAt: 1,
+      })
+      .lean(),
+    SectionModel.find({ year, semester })
+      .select({
+        sectionId: 1,
+        sessionId: 1,
+        subject: 1,
+        courseNumber: 1,
+        number: 1,
+        component: 1,
+        primary: 1,
+        combinedSections: 1,
+      })
+      .lean(),
+    EnrollmentRefreshClickModel.find({
+      year,
+      semester,
+      at: { $gte: new Date(Date.now() - HOT_AFTER_REFRESH_MS) },
+    })
+      .select({ sessionId: 1, subject: 1, courseNumber: 1, number: 1 })
+      .lean(),
+  ]);
+  const recentlyRefreshed = new Set(
+    clicks.map((c) => `${c.sessionId}|${c.subject}|${c.courseNumber}|${c.number}`)
+  );
 
-  type Candidate = { entry: EnrollmentWorkerClass; score: number; gated: boolean };
+  const byId = new Map(sections.map((s) => [String(s.sectionId), s]));
+  const courseKey = (s: { sessionId: string; subject: string; courseNumber: string }) =>
+    `${s.sessionId}|${s.subject}|${s.courseNumber}`;
+  const primaryByKey = new Map(
+    sections
+      .filter((s) => s.primary)
+      .map((s) => [`${courseKey(s)}|${s.number}`, s])
+  );
+  // Courses with labs/discussions (non-primary sections).
+  const withAssociated = new Set(
+    sections.filter((s) => !s.primary).map((s) => courseKey(s))
+  );
+
+  type Candidate = {
+    entry: EnrollmentWorkerClass;
+    score: number;
+    group: keyof typeof GROUPS;
+  };
   const candidates: Candidate[] = [];
+  let independentStudy = 0;
 
-  for (const { year, semester } of terms) {
-    const [classes, sections] = await Promise.all([
-      CatalogClassModel.find({ year, semester })
-        .select({
-          sessionId: 1,
-          subject: 1,
-          courseNumber: 1,
-          number: 1,
-          academicCareer: 1,
-          enrolledCount: 1,
-          maxEnroll: 1,
-          waitlistedCount: 1,
-          viewCount: 1,
-          berkeleytimeRatingCount: 1,
-        })
-        .lean(),
-      SectionModel.find({ year, semester })
-        .select({
-          sectionId: 1,
-          sessionId: 1,
-          subject: 1,
-          courseNumber: 1,
-          number: 1,
-          component: 1,
-          primary: 1,
-          combinedSections: 1,
-          addConsentRequired: 1,
-        })
-        .lean(),
-    ]);
-    if (!classes.length) continue;
+  for (const c of classes) {
+    const primary = primaryByKey.get(`${courseKey(c)}|${c.number}`);
+    if (!primary?.component) continue;
+    if (isIndependentStudy(c.courseNumber, primary.component)) {
+      independentStudy += 1;
+      continue;
+    }
+    const pages = [
+      primary,
+      ...(primary.combinedSections ?? [])
+        .map((id) => byId.get(String(id)))
+        .filter(
+          (s): s is NonNullable<typeof s> =>
+            !!s?.component && s.sectionId !== primary.sectionId
+        ),
+    ].slice(0, MAX_URLS_PER_CLASS);
 
-    const byId = new Map(sections.map((s) => [String(s.sectionId), s]));
-    const primaryByKey = new Map(
-      sections
-        .filter((s) => s.primary)
-        .map((s) => [
-          `${s.sessionId}|${s.subject}|${s.courseNumber}|${s.number}`,
-          s,
-        ])
-    );
+    const enrolled = c.enrolledCount ?? 0;
+    const max = c.maxEnroll ?? 0;
+    // Only trust 0 capacity once a scrape has confirmed it; a newly released
+    // term shows 0/0 everywhere until it's fetched.
+    const confirmedNoCapacity = !!c.enrollmentUpdatedAt && max === 0 && enrolled === 0;
+    const urgent =
+      (c.waitlistedCount ?? 0) > 0 || (max > 0 && enrolled / max >= HOT_FILL_RATIO);
 
-    for (const c of classes) {
-      const primary = primaryByKey.get(
-        `${c.sessionId}|${c.subject}|${c.courseNumber}|${c.number}`
-      );
-      if (!primary?.component) continue;
-      const pages = [
-        primary,
-        ...(primary.combinedSections ?? [])
-          .map((id) => byId.get(String(id)))
-          .filter(
-            (s): s is NonNullable<typeof s> =>
-              !!s?.component && s.sectionId !== primary.sectionId
-          ),
-      ].slice(0, MAX_URLS_PER_CLASS);
-
-      candidates.push({
-        entry: {
-          id: encodeEnrollmentWorkerClassId({
+    candidates.push({
+      entry: {
+        id: encodeEnrollmentWorkerClassId({
+          year,
+          semester,
+          sessionId: c.sessionId,
+          subject: c.subject,
+          courseNumber: c.courseNumber,
+          number: c.number,
+        }),
+        urls: pages.map((s) =>
+          buildUcbCatalogUrl({
             year,
             semester,
-            sessionId: c.sessionId,
-            subject: c.subject,
-            courseNumber: c.courseNumber,
-            number: c.number,
-          }),
-          urls: pages.map((s) =>
-            buildUcbCatalogUrl({
-              year,
-              semester,
-              subject: s.subject,
-              courseNumber: s.courseNumber,
-              number: s.number,
-              component: s.component!,
-            })
-          ),
-          minIntervalSec: 0,
-          maxIntervalSec: 0,
-        },
-        score: popularityScore(c),
-        gated:
-          c.academicCareer === "GRAD" ||
-          needsConsent(primary.addConsentRequired) ||
-          (c.maxEnroll === 0 && (c.enrolledCount ?? 0) === 0),
-      });
-    }
+            subject: s.subject,
+            courseNumber: s.courseNumber,
+            number: s.number,
+            component: s.component!,
+          })
+        ),
+        associated: pages.some((s) => withAssociated.has(courseKey(s))),
+        minIntervalSec: 0,
+        maxIntervalSec: 0,
+      },
+      score: popularityScore(c),
+      group: recentlyRefreshed.has(`${courseKey(c)}|${c.number}`)
+        ? "hot"
+        : catalogLevel(c.courseNumber) >= 200 || confirmedNoCapacity
+          ? "grad"
+          : urgent
+            ? "hot"
+            : "undergrad",
+    });
   }
 
+  // Most popular first: the worker fetches never-seen classes in this order.
   candidates.sort((a, b) => b.score - a.score);
-  candidates.forEach((candidate, rank) => {
-    const tier = POPULARITY_TIERS.find((t) => rank < t.maxRank)!;
-    candidate.entry.minIntervalSec = candidate.gated
-      ? Math.max(tier.minIntervalSec, GATED_MIN_INTERVAL_SEC)
-      : tier.minIntervalSec;
-    candidate.entry.maxIntervalSec = candidate.gated
-      ? GATED_MAX_INTERVAL_SEC
-      : MAX_INTERVAL_SEC;
-  });
+  let undergradRank = 0;
+  for (const candidate of candidates) {
+    if (candidate.group === "undergrad" && undergradRank++ < HOT_BY_VIEWS) {
+      candidate.group = "hot";
+    }
+    const group = GROUPS[candidate.group];
+    candidate.entry.tier = group.tier;
+    candidate.entry.minIntervalSec = group.minIntervalSec;
+    candidate.entry.maxIntervalSec = group.maxIntervalSec;
+  }
 
-  const gated = candidates.filter((c) => c.gated).length;
+  const count = (g: keyof typeof GROUPS) =>
+    candidates.filter((c) => c.group === g).length;
+  const lectureOnly = candidates.filter((c) => !c.entry.associated).length;
   log.info(
-    `Manifest: ${candidates.length} ${term.semester} ${term.year} classes (${gated} gated)`
+    `Manifest: ${candidates.length} ${semester} ${year} classes ` +
+      `(hot ${count("hot")}, undergrad ${count("undergrad")}, grad ${count("grad")}; ` +
+      `${lectureOnly} without labs/discussions; skipped ${independentStudy} independent study)`
   );
   return {
     version: 1,

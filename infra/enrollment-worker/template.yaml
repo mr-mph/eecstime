@@ -7,7 +7,7 @@ Description: >
 Parameters:
   MaxRequestsPerSecond:
     Type: Number
-    Default: 1
+    Default: 3
     Description: Hard cap on requests per second to classes.berkeley.edu.
   Concurrency:
     Type: Number

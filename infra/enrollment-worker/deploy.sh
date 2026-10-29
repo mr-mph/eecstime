@@ -9,7 +9,7 @@
 # 3. On first deploy, creates an access key for the sync user and writes the
 #    ENROLLMENT_WORKER_* settings into the repo's .env for the datapuller
 #
-# Env overrides: AWS_REGION (default us-west-2), MAX_RPS (default 1),
+# Env overrides: AWS_REGION (default us-west-2), MAX_RPS (default 3),
 # MEMORY_MB (default 192), CONCURRENCY (default 8),
 # RESERVE_CONCURRENCY (default false; needs an account limit above 10).
 set -euo pipefail
@@ -26,7 +26,7 @@ aws cloudformation deploy \
   --template-file infra/enrollment-worker/template.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
-    "MaxRequestsPerSecond=${MAX_RPS:-1}" \
+    "MaxRequestsPerSecond=${MAX_RPS:-3}" \
     "MemorySize=${MEMORY_MB:-192}" \
     "Concurrency=${CONCURRENCY:-8}" \
     "ReserveConcurrency=${RESERVE_CONCURRENCY:-false}" \

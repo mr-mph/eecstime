@@ -69,6 +69,7 @@ const NS_EXCLUDE = [
   "bt.enrollment_backup_sync_statuses",
   "bt.draft_schedule_snapshots",
   "bt.enrollment_worker_syncs",
+  "bt.enrollment_refresh_clicks",
   "bt.ucb_enrollment_scrape_statuses",
   // Auth / schedule identity — not migrated from public dump; protect local
   "bt.users",

@@ -3,6 +3,7 @@ import type { RedisClientType } from "redis";
 
 import {
   CatalogClassModel,
+  EnrollmentRefreshClickModel,
   ISectionItem,
   NewEnrollmentHistoryModel,
   SectionModel,
@@ -121,6 +122,15 @@ const persistScrapedSectionEnrollment = async (
   } else {
     const history = enrollmentDoc.history ?? [];
     const lastEntry = history[history.length - 1];
+
+    // The page may be a CDN copy older than what the enrollment worker already
+    // recorded; history must stay in time order, so keep the newer data.
+    if (
+      lastEntry?.endTime &&
+      now.getTime() <= new Date(lastEntry.endTime).getTime()
+    ) {
+      return enrollmentDoc;
+    }
 
     historyPoint.seatReservationCount = preserveRemovedSeatReservationCounts(
       scraped.seatReservationCount,
@@ -414,6 +424,18 @@ export const refreshClassEnrollment = async (
 ) => {
   const resolvedSessionId = sessionId || "1";
 
+  // Someone wants this class's numbers: tell the enrollment worker (via the
+  // datapuller's manifest) to keep it on its fastest refresh for a while.
+  void EnrollmentRefreshClickModel.create({
+    year,
+    semester,
+    sessionId: resolvedSessionId,
+    subject,
+    courseNumber,
+    number,
+    at: new Date(),
+  }).catch(() => undefined);
+
   const primarySection = await SectionModel.findOne({
     year,
     semester,
@@ -448,7 +470,9 @@ export const refreshClassEnrollment = async (
     );
   }
 
-  const now = new Date();
+  // When classes.berkeley.edu generated the page (it's CDN-cached for up to
+  // 15 minutes), not when we fetched it.
+  const now = new Date(scrapedCatalog.pageGeneratedAt ?? Date.now());
 
   const enrollmentDoc = await persistScrapedSectionEnrollmentWithFanOut(
     year,

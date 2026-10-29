@@ -29,7 +29,29 @@ export type ParsedUcbEnrollment = {
 export type ParsedUcbCatalogEnrollment = {
   primary: ParsedUcbEnrollment;
   associatedSections: ParsedUcbEnrollment[];
+  /**
+   * Epoch ms when classes.berkeley.edu generated the class page, i.e. when
+   * the numbers are from. Its CDN caches pages for up to 15 minutes, so this
+   * can trail the fetch time. See ucbPageGeneratedAt.
+   */
+  pageGeneratedAt?: number;
 };
+
+/**
+ * When a classes.berkeley.edu response was generated: Last-Modified (when
+ * Drupal rendered it), else Date - Age, else now. Never in the future.
+ */
+export function ucbPageGeneratedAt(response: Response): number {
+  const now = Date.now();
+  const lastModified = Date.parse(response.headers.get("last-modified") ?? "");
+  if (Number.isFinite(lastModified)) return Math.min(lastModified, now);
+  const date = Date.parse(response.headers.get("date") ?? "");
+  const age = Number(response.headers.get("age") ?? "0");
+  if (Number.isFinite(date)) {
+    return Math.min(date - (Number.isFinite(age) ? age : 0) * 1000, now);
+  }
+  return now;
+}
 
 /** True when the catalog page has no usable seat counts (common on non-controlling cross-listings). */
 export function isBlankUcbEnrollment(
@@ -426,6 +448,12 @@ export type FetchUcbCatalogEnrollmentOptions = {
   timeoutMs?: number;
   /** Override fetch (e.g. backend rate-limited queue). Defaults to global fetch. */
   fetch?: typeof globalThis.fetch;
+  /**
+   * Also load the labs/discussions page (/sections/associated/<node>), which
+   * the class page fetches separately. Skip it for classes without any.
+   * Default true.
+   */
+  associated?: boolean;
 };
 
 export async function fetchUcbCatalogEnrollment(
@@ -478,12 +506,13 @@ export async function fetchUcbCatalogEnrollment(
     );
   }
 
+  const pageGeneratedAt = ucbPageGeneratedAt(response);
   const html = await readText(response);
   const primary = parseUcbCatalogEnrollment(html);
 
   const nodeId = extractNodeId(html);
-  if (!nodeId) {
-    return { primary, associatedSections: [] };
+  if (!nodeId || options.associated === false) {
+    return { primary, associatedSections: [], pageGeneratedAt };
   }
 
   const associatedUrl = new URL(`/sections/associated/${nodeId}`, url);
@@ -505,5 +534,5 @@ export async function fetchUcbCatalogEnrollment(
     // Associated sections are best-effort; keep primary refresh working.
   }
 
-  return { primary, associatedSections };
+  return { primary, associatedSections, pageGeneratedAt };
 }
