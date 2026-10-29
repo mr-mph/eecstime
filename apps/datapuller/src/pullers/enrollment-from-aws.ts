@@ -304,36 +304,39 @@ const importBatch = async (batch: EnrollmentWorkerBatch, log: Config["log"]) => 
   let applied = 0;
 
   for (const result of batch.results) {
-    const key = decodeEnrollmentWorkerClassId(result.id);
-    if (!key) continue;
-    const primarySection = (await SectionModel.findOne({
-      year: key.year,
-      semester: key.semester,
-      sessionId: key.sessionId,
-      subject: key.subject,
-      courseNumber: key.courseNumber,
-      number: key.number,
-      primary: true,
-    }).lean()) as ISectionItem | null;
-    if (!primarySection) continue;
+    // Cross-listings that follow this class's page get the same numbers.
+    for (const id of [result.id, ...(result.alsoIds ?? [])]) {
+      const key = decodeEnrollmentWorkerClassId(id);
+      if (!key) continue;
+      const primarySection = (await SectionModel.findOne({
+        year: key.year,
+        semester: key.semester,
+        sessionId: key.sessionId,
+        subject: key.subject,
+        courseNumber: key.courseNumber,
+        number: key.number,
+        primary: true,
+      }).lean()) as ISectionItem | null;
+      if (!primarySection) continue;
 
-    try {
-      const patches = await persistScrapedClassEnrollment(
-        key,
-        primarySection,
-        result.data,
-        { aborted: false },
-        new Date(result.observedAt ?? result.fetchedAt)
-      );
-      const termKey = `${key.year}|${key.semester}`;
-      const termPatches = patchesByTerm.get(termKey) ?? new Map();
-      for (const { sectionId, patch } of patches) termPatches.set(sectionId, patch);
-      patchesByTerm.set(termKey, termPatches);
-      applied += 1;
-    } catch (error) {
-      log.warn(
-        `Failed to import ${result.id}: ${error instanceof Error ? error.message : error}`
-      );
+      try {
+        const patches = await persistScrapedClassEnrollment(
+          key,
+          primarySection,
+          result.data,
+          { aborted: false },
+          new Date(result.observedAt ?? result.fetchedAt)
+        );
+        const termKey = `${key.year}|${key.semester}`;
+        const termPatches = patchesByTerm.get(termKey) ?? new Map();
+        for (const { sectionId, patch } of patches) termPatches.set(sectionId, patch);
+        patchesByTerm.set(termKey, termPatches);
+        applied += 1;
+      } catch (error) {
+        log.warn(
+          `Failed to import ${id}: ${error instanceof Error ? error.message : error}`
+        );
+      }
     }
   }
 

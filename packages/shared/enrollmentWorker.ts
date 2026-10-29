@@ -37,6 +37,11 @@ export type EnrollmentWorkerManifest = {
 export type EnrollmentWorkerResult = {
   id: string;
   /**
+   * Cross-listings whose own page is blank and that take their numbers from
+   * this class's page; apply the same data to each.
+   */
+  alsoIds?: string[];
+  /**
    * When classes.berkeley.edu generated the page (Last-Modified), i.e. the
    * time the numbers are actually from. May trail fetchedAt by up to the
    * CDN's 15-minute cache. Use this as the enrollment timestamp.

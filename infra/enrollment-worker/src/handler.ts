@@ -47,6 +47,14 @@ const FLUSH_EVERY_MS = 60_000;
 const THROTTLE_PAUSE_MS = 15 * 60_000;
 const UNCHANGED_BACKOFF = 1.5;
 const FAILURE_BACKOFF = 2;
+/** Re-check a cross-listing follower's own page this often. */
+const FOLLOWER_RECHECK_MS = 24 * 60 * 60_000;
+/** Classes whose fastest refresh is at most this count as popular. */
+const POPULAR_MAX_MIN_INTERVAL_SEC = 30 * 60;
+/** Longer timeouts for successive retries of a popular class that timed out. */
+const RETRY_TIMEOUTS_MS = [45_000, 60_000];
+/** Never start a request that could run past this point (Lambda timeout 295s). */
+const SAFE_END_MS = 285_000;
 const USER_AGENT =
   process.env.USER_AGENT ??
   "EECStimeEnrollmentWorker/1.0 (+https://eecstime.sethw.dev)";
@@ -59,6 +67,16 @@ type ClassState = {
   intervalSec: number;
   hash?: string;
   fails?: number;
+  /**
+   * Cross-listing follower: this class's own page is blank and its numbers
+   * come from this sibling page. While fresh, the class isn't fetched on its
+   * own; it rides along with whichever class owns that page.
+   */
+  via?: string;
+  viaCheckedAt?: number;
+  /** A popular class timed out: retry it first next run with this timeout. */
+  retryTimeoutMs?: number;
+  timeoutRetries?: number;
 };
 
 type SchedulerState = {
@@ -130,23 +148,64 @@ const generatedAt = (response: Response): number => {
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
 
-/** Classes due now, most overdue (relative to their own interval) first. */
-const dueClasses = (
+const isTimeout = (error: unknown) =>
+  error instanceof Error && /timeout|timed out/i.test(error.message);
+
+/**
+ * Group cross-listings: a class whose numbers come from another manifest
+ * class's page (state.via) follows that class instead of being fetched.
+ * The leader inherits the fastest refresh of its group.
+ */
+const groupFollowers = (
   manifest: EnrollmentWorkerManifest,
   state: SchedulerState,
   now: number
+) => {
+  const byOwnPage = new Map(manifest.classes.map((c) => [c.urls[0], c]));
+  const followersOf = new Map<string, string[]>();
+  const followers = new Set<string>();
+  for (const c of manifest.classes) {
+    const s = state.classes[c.id];
+    if (!s?.via || !s.viaCheckedAt || now - s.viaCheckedAt > FOLLOWER_RECHECK_MS) {
+      continue;
+    }
+    const leader = byOwnPage.get(s.via);
+    if (!leader || leader.id === c.id || state.classes[leader.id]?.via) continue;
+    followersOf.set(leader.id, [...(followersOf.get(leader.id) ?? []), c.id]);
+    followers.add(c.id);
+  }
+  const byId = new Map(manifest.classes.map((c) => [c.id, c]));
+  const groupMinInterval = new Map<string, number>();
+  for (const [leaderId, ids] of followersOf) {
+    groupMinInterval.set(
+      leaderId,
+      Math.min(...[leaderId, ...ids].map((id) => byId.get(id)!.minIntervalSec))
+    );
+  }
+  return { followersOf, followers, groupMinInterval };
+};
+
+/** Classes due now: timeout retries first, then most overdue relative to interval. */
+const dueClasses = (
+  manifest: EnrollmentWorkerManifest,
+  state: SchedulerState,
+  now: number,
+  followers: Set<string>,
+  minIntervalOf: (c: EnrollmentWorkerClass) => number
 ) =>
   manifest.classes
+    .filter((c) => !followers.has(c.id))
     .map((c) => {
       const s = state.classes[c.id];
-      if (!s) return { c, ratio: Number.POSITIVE_INFINITY };
-      const interval = clamp(s.intervalSec, c.minIntervalSec, c.maxIntervalSec);
-      return { c, ratio: (now - s.last) / 1000 / interval };
+      const minInterval = minIntervalOf(c);
+      if (!s || s.retryTimeoutMs) {
+        return { c, minInterval, ratio: Number.POSITIVE_INFINITY };
+      }
+      const interval = clamp(s.intervalSec, minInterval, c.maxIntervalSec);
+      return { c, minInterval, ratio: (now - s.last) / 1000 / interval };
     })
     .filter(({ ratio }) => ratio >= 1)
-    .sort(
-      (a, b) => b.ratio - a.ratio || a.c.minIntervalSec - b.c.minIntervalSec
-    )
+    .sort((a, b) => b.ratio - a.ratio || a.minInterval - b.minInterval)
     .map(({ c }) => c);
 
 export const handler = async () => {
@@ -186,22 +245,35 @@ export const handler = async () => {
     return response;
   };
 
-  const fetchClass = async (c: EnrollmentWorkerClass) => {
-    for (const url of c.urls) {
-      if (throttled) return null;
+  /**
+   * Try the class's pages in order (a known-good sibling page first if its
+   * own page was blank recently). Returns the data and which page served it.
+   */
+  const fetchClass = async (
+    c: EnrollmentWorkerClass,
+    timeoutMs: number,
+    knownVia: string | undefined
+  ) => {
+    const urls = knownVia
+      ? [knownVia, ...c.urls.filter((u) => u !== knownVia)]
+      : c.urls;
+    let timedOut = false;
+    for (const url of urls) {
+      if (throttled) break;
       pageGeneratedAt = null;
       try {
         const data = await fetchUcbCatalogEnrollment(url, {
           fetch: pacedFetch,
           userAgent: USER_AGENT,
-          timeoutMs: REQUEST_TIMEOUT_MS,
+          timeoutMs,
         });
-        if (!isBlankUcbEnrollment(data.primary)) return data;
-      } catch {
+        if (!isBlankUcbEnrollment(data.primary)) return { data, url, timedOut };
+      } catch (error) {
         // Try the next cross-listing; persistent failures back off below.
+        if (isTimeout(error)) timedOut = true;
       }
     }
-    return null;
+    return { data: null, url: null, timedOut };
   };
 
   let pending: EnrollmentWorkerResult[] = [];
@@ -221,37 +293,77 @@ export const handler = async () => {
     );
   };
 
-  const queue = dueClasses(manifest, state, started);
+  const { followersOf, followers, groupMinInterval } = groupFollowers(
+    manifest,
+    state,
+    started
+  );
+  const minIntervalOf = (c: EnrollmentWorkerClass) =>
+    groupMinInterval.get(c.id) ?? c.minIntervalSec;
+  const queue = dueClasses(manifest, state, started, followers, minIntervalOf);
+  const byId = new Map(manifest.classes.map((c) => [c.id, c]));
   let ok = 0;
   let changed = 0;
   let failed = 0;
-  // Leave room for a class's worst case (2 requests that both time out).
-  const stopAt = started + RUN_BUDGET_MS - 2 * REQUEST_TIMEOUT_MS;
+  let retried = 0;
+  let followerUpdates = 0;
 
   for (const c of queue) {
-    if (Date.now() >= stopAt || throttled) break;
+    if (Date.now() >= started + RUN_BUDGET_MS || throttled) break;
     const prev = state.classes[c.id];
+    const timeoutMs = prev?.retryTimeoutMs ?? REQUEST_TIMEOUT_MS;
+    // Worst case is two requests that both time out.
+    if (Date.now() + 2 * timeoutMs > started + SAFE_END_MS) continue;
+    const minInterval = minIntervalOf(c);
     const interval = clamp(
-      prev?.intervalSec ?? c.minIntervalSec,
-      c.minIntervalSec,
+      prev?.intervalSec ?? minInterval,
+      minInterval,
       c.maxIntervalSec
     );
-    const data = await fetchClass(c);
+    const viaFresh =
+      !!prev?.via &&
+      !!prev.viaCheckedAt &&
+      started - prev.viaCheckedAt <= FOLLOWER_RECHECK_MS;
+    if (prev?.retryTimeoutMs) retried += 1;
+
+    const { data, url, timedOut } = await fetchClass(
+      c,
+      timeoutMs,
+      viaFresh ? prev!.via : undefined
+    );
     const fetchedAt = Date.now();
     const observedAt = pageGeneratedAt ?? fetchedAt;
 
-    if (data) {
+    if (data && url) {
       const hash = enrollmentHash(data);
       const didChange = hash !== prev?.hash;
+      const nextInterval = didChange
+        ? minInterval
+        : clamp(interval * UNCHANGED_BACKOFF, minInterval, c.maxIntervalSec);
+      // Served by a sibling page: remember it. Only a fetch that tried this
+      // class's own page first (re)confirms the follower relationship.
+      const via = url !== c.urls[0] ? url : undefined;
       state.classes[c.id] = {
         last: fetchedAt,
-        intervalSec: didChange
-          ? c.minIntervalSec
-          : clamp(interval * UNCHANGED_BACKOFF, c.minIntervalSec, c.maxIntervalSec),
+        intervalSec: nextInterval,
         hash,
+        via,
+        viaCheckedAt: via ? (viaFresh ? prev!.viaCheckedAt : fetchedAt) : undefined,
       };
+      const alsoIds = followersOf.get(c.id) ?? [];
+      for (const id of alsoIds) {
+        const f = byId.get(id)!;
+        state.classes[id] = {
+          ...state.classes[id],
+          last: fetchedAt,
+          intervalSec: clamp(nextInterval, f.minIntervalSec, f.maxIntervalSec),
+          hash,
+        };
+      }
+      followerUpdates += alsoIds.length;
       pending.push({
         id: c.id,
+        ...(alsoIds.length ? { alsoIds } : {}),
         observedAt: new Date(observedAt).toISOString(),
         fetchedAt: new Date(fetchedAt).toISOString(),
         data,
@@ -259,11 +371,22 @@ export const handler = async () => {
       ok += 1;
       if (didChange) changed += 1;
     } else if (!throttled) {
+      const retries = prev?.timeoutRetries ?? 0;
+      const retryPopular =
+        timedOut &&
+        minInterval <= POPULAR_MAX_MIN_INTERVAL_SEC &&
+        retries < RETRY_TIMEOUTS_MS.length;
       state.classes[c.id] = {
+        ...prev,
         last: fetchedAt,
-        intervalSec: clamp(interval * FAILURE_BACKOFF, c.minIntervalSec, c.maxIntervalSec),
-        hash: prev?.hash,
+        // Popular + timed out: keep the interval and jump the queue next run
+        // with a longer timeout. Otherwise back off.
+        intervalSec: retryPopular
+          ? interval
+          : clamp(interval * FAILURE_BACKOFF, minInterval, c.maxIntervalSec),
         fails: (prev?.fails ?? 0) + 1,
+        retryTimeoutMs: retryPopular ? RETRY_TIMEOUTS_MS[retries] : undefined,
+        timeoutRetries: retryPopular ? retries + 1 : undefined,
       };
       failed += 1;
     }
@@ -287,6 +410,9 @@ export const handler = async () => {
     JSON.stringify({
       due: queue.length,
       fetched: ok,
+      followers: followers.size,
+      followerUpdates,
+      timeoutRetries: retried,
       changed,
       failed,
       requests,
