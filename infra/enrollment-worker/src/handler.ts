@@ -212,29 +212,52 @@ const groupFollowers = (
   return { followersOf, followers, groupMinInterval };
 };
 
-/** Classes due now: timeout retries first, then most overdue relative to interval. */
+/**
+ * Never attempted: no successful fetch and no failed attempt yet. Seeded state
+ * only records when the class was first seen.
+ */
+const isBacklog = (s: ClassState | undefined) => !s || (!s.hash && !s.okAt && !s.fails);
+
+/**
+ * Classes to fetch this run, in order:
+ *  1. popular classes retrying a timeout (longer timeout);
+ *  2. the backlog: every class never attempted, most popular first (the
+ *     manifest is sorted by popularity), so each class gets at least one
+ *     fetch as soon as possible;
+ *  3. refreshes, most overdue relative to their own interval first.
+ * A backlog class that fails drops out of (2) into normal failure backoff,
+ * so a dead page can't hold the front of the queue.
+ */
 const dueClasses = (
   manifest: EnrollmentWorkerManifest,
   state: SchedulerState,
   now: number,
   followers: Set<string>,
   minIntervalOf: (c: EnrollmentWorkerClass) => number
-) =>
-  manifest.classes
-    .filter((c) => !followers.has(c.id))
-    .map((c) => {
-      const s = state.classes[c.id];
+) => {
+  const retries: EnrollmentWorkerClass[] = [];
+  const backlog: EnrollmentWorkerClass[] = [];
+  const refreshes: { c: EnrollmentWorkerClass; minInterval: number; ratio: number }[] = [];
+  for (const c of manifest.classes) {
+    if (followers.has(c.id)) continue;
+    const s = state.classes[c.id];
+    if (s?.retryTimeoutMs) {
+      retries.push(c);
+    } else if (isBacklog(s)) {
+      backlog.push(c);
+    } else {
       const minInterval = minIntervalOf(c);
-      // Timeout retries of popular classes jump the queue.
-      if (!s || s.retryTimeoutMs) {
-        return { c, minInterval, ratio: Number.POSITIVE_INFINITY };
-      }
-      const interval = clamp(s.intervalSec, minInterval, c.maxIntervalSec);
-      return { c, minInterval, ratio: (now - s.last) / 1000 / interval };
-    })
-    .filter(({ ratio }) => ratio >= 1)
-    .sort((a, b) => b.ratio - a.ratio || a.minInterval - b.minInterval)
-    .map(({ c }) => c);
+      const interval = clamp(s!.intervalSec, minInterval, c.maxIntervalSec);
+      const ratio = (now - s!.last) / 1000 / interval;
+      if (ratio >= 1) refreshes.push({ c, minInterval, ratio });
+    }
+  }
+  refreshes.sort((a, b) => b.ratio - a.ratio || a.minInterval - b.minInterval);
+  return {
+    queue: [...retries, ...backlog, ...refreshes.map(({ c }) => c)],
+    backlog: backlog.length,
+  };
+};
 
 export const handler = async () => {
   if (!BUCKET) throw new Error("BUCKET env var is required");
@@ -375,10 +398,8 @@ export const handler = async () => {
   );
   const minIntervalOf = (c: EnrollmentWorkerClass) =>
     groupMinInterval.get(c.id) ?? c.minIntervalSec;
-  // A class seen for the first time is treated as last fetched one interval
-  // ago: due now, then growing more urgent at the same pace as everything
-  // else. (Ranking never-fetched classes first would let a backlog, e.g. a
-  // new term, starve refreshes of popular classes for hours.)
+  // Record when each class was first seen (it stays in the backlog until its
+  // first attempt; see dueClasses).
   let seeded = 0;
   for (const c of manifest.classes) {
     if (state.classes[c.id]) continue;
@@ -386,7 +407,13 @@ export const handler = async () => {
     state.classes[c.id] = { last: started - interval * 1000, intervalSec: interval };
     seeded += 1;
   }
-  const queue = dueClasses(manifest, state, started, followers, minIntervalOf);
+  const { queue, backlog } = dueClasses(
+    manifest,
+    state,
+    started,
+    followers,
+    minIntervalOf
+  );
   const byId = new Map(manifest.classes.map((c) => [c.id, c]));
   let ok = 0;
   let changed = 0;
@@ -593,6 +620,7 @@ export const handler = async () => {
   console.log(
     JSON.stringify({
       due: queue.length,
+      backlog,
       newlySeen: seeded,
       fetched: ok,
       followers: followers.size,

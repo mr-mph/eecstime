@@ -20,7 +20,6 @@ import {
 import { model, Schema } from "mongoose";
 import { gunzipSync, gzipSync } from "node:zlib";
 
-import { parseTermName } from "@repo/common";
 import {
   CatalogClassModel,
   ISectionItem,
@@ -42,7 +41,7 @@ import {
   persistScrapedClassEnrollment,
 } from "../lib/ucb-enrollment-persist";
 import { Config } from "../shared/config";
-import { getActiveTerms } from "../shared/term-selectors";
+import { getCurrentCatalogTerm } from "../shared/term-selectors";
 import { invalidateBackendCaches } from "./enrollment-from-public-backup";
 
 const MANIFEST_MAX_AGE_MS = 60 * 60_000;
@@ -77,6 +76,8 @@ interface IEnrollmentWorkerSync {
   cursor?: string | null;
   manifestPublishedAt?: Date | null;
   manifestClassCount?: number;
+  /** "2027 Spring": the term the published manifest covers. */
+  manifestTerm?: string | null;
 }
 
 const EnrollmentWorkerSyncModel = model<IEnrollmentWorkerSync>(
@@ -86,6 +87,7 @@ const EnrollmentWorkerSyncModel = model<IEnrollmentWorkerSync>(
     cursor: { type: String, default: null },
     manifestPublishedAt: { type: Date, default: null },
     manifestClassCount: { type: Number },
+    manifestTerm: { type: String, default: null },
   })
 );
 
@@ -116,19 +118,18 @@ const popularityScore = (c: {
 const needsConsent = (code?: string) => code === "I" || code === "D";
 
 const buildManifest = async (
-  log: Config["log"]
+  log: Config["log"],
+  term: { year: number; semester: string }
 ): Promise<EnrollmentWorkerManifest> => {
-  // Every active (current/upcoming), non-tentative term with catalog data.
-  const terms = new Map<string, { year: number; semester: string }>();
-  for (const term of await getActiveTerms()) {
-    const parsed = parseTermName(term.name);
-    if (parsed) terms.set(term.name, parsed);
-  }
+  // Only the latest term with catalog data (the catalog's default term, e.g.
+  // Spring 2027 once it's released). The term in session is past its
+  // enrollment rush and not worth the requests.
+  const terms = [term];
 
   type Candidate = { entry: EnrollmentWorkerClass; score: number; gated: boolean };
   const candidates: Candidate[] = [];
 
-  for (const { year, semester } of terms.values()) {
+  for (const { year, semester } of terms) {
     const [classes, sections] = await Promise.all([
       CatalogClassModel.find({ year, semester })
         .select({
@@ -230,7 +231,7 @@ const buildManifest = async (
 
   const gated = candidates.filter((c) => c.gated).length;
   log.info(
-    `Manifest: ${candidates.length} classes across ${terms.size} term(s) (${gated} gated)`
+    `Manifest: ${candidates.length} ${term.semester} ${term.year} classes (${gated} gated)`
   );
   return {
     version: 1,
@@ -244,13 +245,20 @@ const publishManifestIfStale = async (
   bucket: string,
   log: Config["log"]
 ) => {
+  const term = await getCurrentCatalogTerm();
+  if (!term) {
+    log.warn("No active term with catalog data; not publishing a manifest");
+    return;
+  }
+  const termName = `${term.year} ${term.semester}`;
   const status = await EnrollmentWorkerSyncModel.findOne({ key: SYNC_KEY }).lean();
   const age = status?.manifestPublishedAt
     ? Date.now() - new Date(status.manifestPublishedAt).getTime()
     : Number.POSITIVE_INFINITY;
-  if (age < MANIFEST_MAX_AGE_MS) return;
+  // Republish hourly, or right away when the target term changes.
+  if (age < MANIFEST_MAX_AGE_MS && status?.manifestTerm === termName) return;
 
-  const manifest = await buildManifest(log);
+  const manifest = await buildManifest(log, term);
   if (!manifest.classes.length) {
     log.warn("No classes to poll; not publishing an empty manifest");
     return;
@@ -270,6 +278,7 @@ const publishManifestIfStale = async (
       $set: {
         manifestPublishedAt: new Date(),
         manifestClassCount: manifest.classes.length,
+        manifestTerm: termName,
       },
     },
     { upsert: true }
