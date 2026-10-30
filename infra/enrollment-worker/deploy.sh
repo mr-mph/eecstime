@@ -13,7 +13,7 @@
 # MEMORY_MB (default 192), CONCURRENCY (default 2), MAX_CONCURRENCY (default 4),
 # RESERVE_CONCURRENCY (default false; needs an account limit above 10),
 # WORKER_ENABLED (true/false; default: keep the current state).
-set -euo pipefailzo
+set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 REGION="${AWS_REGION:-us-west-2}"
