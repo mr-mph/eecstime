@@ -7,7 +7,8 @@
  *
  * Rate: every outgoing request (a class page and its associated-sections page)
  * goes through one pacer that spaces request starts >= 1/MAX_RPS apart. A 429
- * or 503 stops the run and pauses the worker for THROTTLE_PAUSE_MS.
+ * or 503 (or BLOCK_STREAK_TO_STOP 403s in a row) stops the run and pauses
+ * the worker, doubling the pause on each blocked run (see blockPauseMs).
  *
  * Priority: each class has a refresh interval bounded by the manifest's
  * [minIntervalSec, maxIntervalSec] (min is set from popularity by the
@@ -44,7 +45,7 @@ import {
 } from "../../../packages/shared/ucbCatalogEnrollment";
 
 const BUCKET = process.env.BUCKET ?? "";
-const MAX_RPS = Number(process.env.MAX_REQUESTS_PER_SECOND ?? "3");
+const MAX_RPS = Number(process.env.MAX_REQUESTS_PER_SECOND ?? "1");
 const RUN_BUDGET_MS = Number(process.env.RUN_BUDGET_MS ?? "270000");
 const REQUEST_TIMEOUT_MS = 20_000;
 /**
@@ -54,9 +55,10 @@ const REQUEST_TIMEOUT_MS = 20_000;
  * limit carries over between runs. The pacer still spaces request starts at
  * least 1/MAX_RPS apart, and a 429/503 still stops the run.
  */
-const CONCURRENCY_START = Number(process.env.CONCURRENCY ?? "8");
+const CONCURRENCY_START = Number(process.env.CONCURRENCY ?? "2");
 const CONCURRENCY_MIN = 2;
-const CONCURRENCY_MAX = Number(process.env.MAX_CONCURRENCY ?? "24");
+/** Classes in flight. Each one holds an open request, so keep this small. */
+const CONCURRENCY_MAX = Number(process.env.MAX_CONCURRENCY ?? "4");
 const ADAPT_EVERY_MS = Number(process.env.ADAPT_EVERY_MS ?? "30000");
 const ADAPT_MIN_SAMPLES = 10;
 const ADAPT_STEP = 2;
@@ -69,7 +71,15 @@ const ADAPT_OK_LATENCY = 1.5;
 const ADAPT_BAD_FAIL_RATE = 0.2;
 const ADAPT_BAD_LATENCY = 2.5;
 const FLUSH_EVERY_MS = 60_000;
-const THROTTLE_PAUSE_MS = 15 * 60_000;
+/** Pause after the first blocked run; doubles each blocked run after that. */
+const BLOCK_PAUSE_BASE_MS = 30 * 60_000;
+const BLOCK_PAUSE_MAX_MS = 24 * 60 * 60_000;
+/** This many 403s in a row means we're blocked, not that a page is forbidden. */
+const BLOCK_STREAK_TO_STOP = 3;
+const blockPauseMs = (blockedRuns: number) =>
+  Math.min(BLOCK_PAUSE_MAX_MS, BLOCK_PAUSE_BASE_MS * 2 ** Math.max(0, blockedRuns - 1));
+/** 403/429/503: the site is refusing us. */
+const isRefusal = (status: number) => status === 403 || status === 429 || status === 503;
 const UNCHANGED_BACKOFF = 1.5;
 const FAILURE_BACKOFF = 2;
 /** Re-check a cross-listing follower's own page this often. */
@@ -90,8 +100,7 @@ const ERROR_HISTORY = 100;
 const RUN_EVENT_ID = "run";
 const RUN_HISTORY = 48;
 const USER_AGENT =
-  process.env.USER_AGENT ??
-  "EECStimeEnrollmentWorker/1.0 (+https://eecstime.sethw.dev)";
+  process.env.USER_AGENT ?? "BerkeleytimeEnrollmentRefresh/1.0";
 
 const s3 = new S3Client({});
 
@@ -119,6 +128,8 @@ type ClassState = {
 type SchedulerState = {
   version: 1;
   pausedUntil?: number;
+  /** Consecutive runs that ended blocked (drives the escalating pause). */
+  blockedRuns?: number;
   classes: Record<string, ClassState>;
   /** Recent run summaries, newest last (for the dashboard). */
   runs?: EnrollmentWorkerRunSummary[];
@@ -348,6 +359,7 @@ export const handler = async () => {
     }));
   let requests = 0;
   let throttled = false;
+  let refusalStreak = 0;
   let inFlight = 0;
   let maxInFlight = 0;
   // Adaptive concurrency: request outcomes since the last adjustment.
@@ -361,6 +373,8 @@ export const handler = async () => {
   let samples: { ms: number; ok: boolean; cached: boolean }[] = [];
   const pacedFetch: typeof fetch = async (input, init) => {
     await acquireSlot();
+    // Once refused, send nothing more this run (not even queued requests).
+    if (throttled) throw new Error("Not sent: classes.berkeley.edu is refusing requests");
     requests += 1;
     inFlight += 1;
     maxInFlight = Math.max(maxInFlight, inFlight);
@@ -368,9 +382,16 @@ export const handler = async () => {
     try {
       const response = await fetch(input, init);
       if (response.status === 429 || response.status === 503) throttled = true;
+      if (response.status === 403) {
+        refusalStreak += 1;
+        if (refusalStreak >= BLOCK_STREAK_TO_STOP) throttled = true;
+      } else if (!isRefusal(response.status)) {
+        refusalStreak = 0;
+      }
       samples.push({
         ms: Date.now() - t0,
-        ok: response.status < 500,
+        // Refusals and server errors are failures; a 404 is a normal answer.
+        ok: response.status < 500 && !isRefusal(response.status),
         // e.g. "MISS, MISS, HIT" — any HIT means a CDN layer answered.
         cached: /\bHIT\b/i.test(response.headers.get("x-cache") ?? ""),
       });
@@ -689,22 +710,27 @@ export const handler = async () => {
   }
   await Promise.all(running);
   clearInterval(adaptTimer);
-  if (throttled) limit = Math.max(CONCURRENCY_MIN, Math.floor(limit / 2));
+  // Blocked: start the next run as gently as possible.
+  if (throttled) limit = CONCURRENCY_MIN;
   state.concurrency = limit;
 
   await flush();
 
   if (throttled) {
-    state.pausedUntil = Date.now() + THROTTLE_PAUSE_MS;
+    state.blockedRuns = (state.blockedRuns ?? 0) + 1;
+    state.pausedUntil = Date.now() + blockPauseMs(state.blockedRuns);
     record({
       id: RUN_EVENT_ID,
       at: Date.now(),
       ok: false,
-      error: `classes.berkeley.edu returned 429/503; pausing until ${new Date(state.pausedUntil).toISOString()}`,
+      error:
+        `classes.berkeley.edu is refusing requests (403/429/503); blocked run #${state.blockedRuns}, ` +
+        `pausing until ${new Date(state.pausedUntil).toISOString()}`,
       ms: Date.now() - started,
     });
   } else {
     delete state.pausedUntil;
+    delete state.blockedRuns;
   }
   state.errors = errors;
   const seconds = (Date.now() - started) / 1000;

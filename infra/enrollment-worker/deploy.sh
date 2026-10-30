@@ -9,27 +9,37 @@
 # 3. On first deploy, creates an access key for the sync user and writes the
 #    ENROLLMENT_WORKER_* settings into the repo's .env for the datapuller
 #
-# Env overrides: AWS_REGION (default us-west-2), MAX_RPS (default 3),
-# MEMORY_MB (default 192), CONCURRENCY (default 8),
-# RESERVE_CONCURRENCY (default false; needs an account limit above 10).
-set -euo pipefail
+# Env overrides: AWS_REGION (default us-west-2), MAX_RPS (default 1),
+# MEMORY_MB (default 192), CONCURRENCY (default 2), MAX_CONCURRENCY (default 4),
+# RESERVE_CONCURRENCY (default false; needs an account limit above 10),
+# WORKER_ENABLED (true/false; default: keep the current state).
+set -euo pipefailzo
 
 cd "$(dirname "$0")/../.."
 REGION="${AWS_REGION:-us-west-2}"
 STACK=eecstime-enrollment-worker
 OUT=infra/enrollment-worker/dist
 
-echo "==> Deploying stack $STACK ($REGION)"
+# Keep the worker's current on/off state unless WORKER_ENABLED is given, so a
+# redeploy never silently restarts a worker that was stopped (e.g. blocked).
+if [ -z "${WORKER_ENABLED:-}" ]; then
+  current="$(aws scheduler get-schedule --region "$REGION" --name "$STACK" \
+    --query State --output text 2>/dev/null || echo ENABLED)"
+  WORKER_ENABLED=$([ "$current" = "DISABLED" ] && echo false || echo true)
+fi
+echo "==> Deploying stack $STACK ($REGION), worker enabled: $WORKER_ENABLED"
 aws cloudformation deploy \
   --region "$REGION" \
   --stack-name "$STACK" \
   --template-file infra/enrollment-worker/template.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
-    "MaxRequestsPerSecond=${MAX_RPS:-3}" \
+    "MaxRequestsPerSecond=${MAX_RPS:-1}" \
     "MemorySize=${MEMORY_MB:-192}" \
-    "Concurrency=${CONCURRENCY:-8}" \
+    "Concurrency=${CONCURRENCY:-2}" \
+    "MaxConcurrency=${MAX_CONCURRENCY:-4}" \
     "ReserveConcurrency=${RESERVE_CONCURRENCY:-false}" \
+    "WorkerEnabled=$WORKER_ENABLED" \
   --no-fail-on-empty-changeset
 
 output() {

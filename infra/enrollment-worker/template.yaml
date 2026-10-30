@@ -5,16 +5,30 @@ Description: >
   the class manifest and imports the batches. See src/handler.ts.
 
 Parameters:
+  WorkerEnabled:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >
+      "false" stops the worker: schedule disabled and no executions allowed.
+      deploy.sh keeps the current state unless WORKER_ENABLED is set.
   MaxRequestsPerSecond:
     Type: Number
-    Default: 3
+    Default: 1
     Description: Hard cap on requests per second to classes.berkeley.edu.
   Concurrency:
     Type: Number
-    Default: 8
+    Default: 2
     Description: >
-      Classes fetched at once. Request starts are still capped by
-      MaxRequestsPerSecond; this only keeps slow pages from idling the budget.
+      Classes fetched at once when a run starts. Request starts are still
+      capped by MaxRequestsPerSecond. The worker may raise this while pages
+      look healthy, up to MaxConcurrency.
+  MaxConcurrency:
+    Type: Number
+    Default: 4
+    Description: >
+      Most classes in flight at once. Each holds an open request to
+      classes.berkeley.edu, so this is the concurrency ceiling.
   MemorySize:
     Type: Number
     Default: 192
@@ -28,6 +42,7 @@ Parameters:
 
 Conditions:
   Reserve: !Equals [!Ref ReserveConcurrency, "true"]
+  Enabled: !Equals [!Ref WorkerEnabled, "true"]
 
 Resources:
   Bucket:
@@ -87,7 +102,8 @@ Resources:
       Handler: index.handler
       MemorySize: !Ref MemorySize
       Timeout: 295
-      ReservedConcurrentExecutions: !If [Reserve, 1, !Ref AWS::NoValue]
+      ReservedConcurrentExecutions:
+        !If [Enabled, !If [Reserve, 1, !Ref AWS::NoValue], 0]
       Role: !GetAtt FunctionRole.Arn
       LoggingConfig:
         LogGroup: !Ref LogGroup
@@ -96,6 +112,7 @@ Resources:
           BUCKET: !Ref Bucket
           MAX_REQUESTS_PER_SECOND: !Ref MaxRequestsPerSecond
           CONCURRENCY: !Ref Concurrency
+          MAX_CONCURRENCY: !Ref MaxConcurrency
           RUN_BUDGET_MS: "270000"
       # Placeholder; deploy.sh uploads the real bundle with update-function-code.
       Code:
@@ -132,6 +149,7 @@ Resources:
     Properties:
       Name: eecstime-enrollment-worker
       ScheduleExpression: rate(5 minutes)
+      State: !If [Enabled, ENABLED, DISABLED]
       FlexibleTimeWindow: { Mode: "OFF" }
       Target:
         Arn: !GetAtt Function.Arn
