@@ -27,6 +27,7 @@ import {
   isLsBreadthRequirement,
   isUniversityRequirementLabel,
   normalizeInstructorName,
+  resolveInstructorMatch,
 } from "@repo/shared";
 
 import { Config } from "../shared/config";
@@ -851,7 +852,9 @@ export const syncCatalogEnrollmentFromHistories = async (
   ).filter((id): id is string => Boolean(id));
 
   if (primarySectionIds.length === 0) {
-    log.info(`No catalog classes for ${semester} ${year}; skipping enrollment sync`);
+    log.info(
+      `No catalog classes for ${semester} ${year}; skipping enrollment sync`
+    );
     return;
   }
 
@@ -896,15 +899,11 @@ export const syncCatalogEnrollmentFromHistories = async (
     const latest = history[history.length - 1];
     if (!latest) continue;
 
-    const preservedCounts = buildPreservedSeatReservationCountsFromHistory(
-      history
-    );
+    const preservedCounts =
+      buildPreservedSeatReservationCountsFromHistory(history);
     const existing = existingByPrimarySectionId.get(hist.sectionId);
     const seatReservations = preserveRemovedActiveSeatReservations(
-      buildActiveSeatReservations(
-        preservedCounts,
-        hist.seatReservationTypes
-      ),
+      buildActiveSeatReservations(preservedCounts, hist.seatReservationTypes),
       existing?.seatReservations
     );
 
@@ -950,7 +949,9 @@ export const syncCatalogEnrollmentForCurrentTerm = async (
 ) => {
   const currentTerm = await getCurrentCatalogTerm();
   if (!currentTerm) {
-    log.warn("No active term with catalog data; skipping catalog enrollment sync");
+    log.warn(
+      "No active term with catalog data; skipping catalog enrollment sync"
+    );
     return;
   }
 
@@ -1136,6 +1137,24 @@ export const updateCatalogRmpRatings = async (
     .select({ _id: 1, meetings: 1 })
     .lean();
 
+  const ratingCache = new Map<string, number | null>();
+  const ratingForInstructor = (
+    given: string,
+    family: string
+  ): number | null => {
+    const cacheKey = instructorLookupKey(given, family);
+    const cached = ratingCache.get(cacheKey);
+    if (cached !== undefined) return cached;
+    const rating = resolveInstructorMatch(
+      given,
+      family,
+      ratingByName,
+      ratingsByLastName
+    );
+    ratingCache.set(cacheKey, rating);
+    return rating;
+  };
+
   const bulkOps: Parameters<typeof CatalogClassModel.bulkWrite>[0] = [];
 
   for (const catalogClass of catalogClasses) {
@@ -1150,21 +1169,7 @@ export const updateCatalogRmpRatings = async (
       const family = instructor.familyName?.trim() ?? "";
       if (!family) continue;
 
-      let rating: number | null = null;
-
-      if (given) {
-        const exact = ratingByName.get(instructorLookupKey(given, family));
-        if (exact != null) {
-          rating = exact;
-        }
-      }
-
-      if (rating == null) {
-        const lastOnly = ratingsByLastName.get(normalizeInstructorName(family));
-        if (lastOnly?.length === 1) {
-          rating = lastOnly[0];
-        }
-      }
+      const rating = ratingForInstructor(given, family);
 
       if (rating != null) {
         matchedCount += 1;

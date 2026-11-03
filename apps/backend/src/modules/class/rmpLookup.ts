@@ -3,6 +3,7 @@ import {
   buildRmpProfessorUrl,
   instructorLookupKey,
   normalizeInstructorName,
+  resolveInstructorMatch,
 } from "@repo/shared";
 
 type RmpMatch = {
@@ -79,16 +80,7 @@ export async function lookupInstructorRmp(
   if (!family) return null;
 
   const { byName, byLastName } = await getRmpLookupMaps();
-
-  if (given) {
-    const exact = byName.get(instructorLookupKey(given, family));
-    if (exact) return exact;
-  }
-
-  const lastOnly = byLastName.get(normalizeInstructorName(family));
-  if (lastOnly?.length === 1) return lastOnly[0];
-
-  return null;
+  return resolveInstructorMatch(given, family, byName, byLastName);
 }
 
 /** Returns a real RMP score, or null when the instructor is N/A / unmatched. */
