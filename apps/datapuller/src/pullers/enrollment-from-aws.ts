@@ -17,7 +17,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
-import { model, Schema } from "mongoose";
+import { Schema, model } from "mongoose";
 import { gunzipSync, gzipSync } from "node:zlib";
 
 import {
@@ -35,6 +35,7 @@ import {
   decodeEnrollmentWorkerClassId,
   encodeEnrollmentWorkerClassId,
   isIndependentStudyNumber,
+  withIndependentStudyLowest,
 } from "@repo/shared";
 
 import { updateCatalogEnrollment } from "../lib/catalog-denormalize";
@@ -51,7 +52,7 @@ const MANIFEST_MAX_AGE_MS = 60 * 60_000;
  * Bump when buildManifest's rules change, so a restarted datapuller
  * republishes right away instead of waiting out MANIFEST_MAX_AGE_MS.
  */
-const MANIFEST_RULES_VERSION = 2;
+const MANIFEST_RULES_VERSION = 3;
 /** Cross-listing pages to fall back on when the primary listing is 0/0. */
 const MAX_URLS_PER_CLASS = 3;
 
@@ -79,6 +80,11 @@ const GROUPS = {
     tier: "Grad / professional / no capacity",
     minIntervalSec: 6 * HOUR,
     maxIntervalSec: 24 * HOUR,
+  },
+  lowest: {
+    tier: "Lowest: tutorial, supervised research, group study",
+    minIntervalSec: 24 * HOUR,
+    maxIntervalSec: 7 * 24 * HOUR,
   },
 } as const;
 /** Undergrad classes this high in views + ratings count as hot. */
@@ -138,8 +144,10 @@ const popularityScore = (c: {
 
 /**
  * Independent study / research / field study: one section per instructor and
- * nothing for anyone else to enroll in, so not worth polling. 98/198 (DeCals,
- * group study) stay. Matches prefixes/suffixes like H199 or 299A.
+ * nothing for anyone else to enroll in, so left out of the manifest. 98/198
+ * (DeCals, directed group study) stay on the normal schedule. Tutorials,
+ * 298/300, and other bulk section shells stay in the manifest at lowest
+ * priority. Matches prefixes/suffixes like H199 or 299A.
  */
 const isIndependentStudy = (courseNumber: string, component?: string) =>
   component === "IND" || isIndependentStudyNumber(courseNumber);
@@ -192,12 +200,17 @@ const buildManifest = async (
       .lean(),
   ]);
   const recentlyRefreshed = new Set(
-    clicks.map((c) => `${c.sessionId}|${c.subject}|${c.courseNumber}|${c.number}`)
+    clicks.map(
+      (c) => `${c.sessionId}|${c.subject}|${c.courseNumber}|${c.number}`
+    )
   );
 
   const byId = new Map(sections.map((s) => [String(s.sectionId), s]));
-  const courseKey = (s: { sessionId: string; subject: string; courseNumber: string }) =>
-    `${s.sessionId}|${s.subject}|${s.courseNumber}`;
+  const courseKey = (s: {
+    sessionId: string;
+    subject: string;
+    courseNumber: string;
+  }) => `${s.sessionId}|${s.subject}|${s.courseNumber}`;
   const primaryByKey = new Map(
     sections
       .filter((s) => s.primary)
@@ -237,9 +250,11 @@ const buildManifest = async (
     const max = c.maxEnroll ?? 0;
     // Only trust 0 capacity once a scrape has confirmed it; a newly released
     // term shows 0/0 everywhere until it's fetched.
-    const confirmedNoCapacity = !!c.enrollmentUpdatedAt && max === 0 && enrolled === 0;
+    const confirmedNoCapacity =
+      !!c.enrollmentUpdatedAt && max === 0 && enrolled === 0;
     const urgent =
-      (c.waitlistedCount ?? 0) > 0 || (max > 0 && enrolled / max >= HOT_FILL_RATIO);
+      (c.waitlistedCount ?? 0) > 0 ||
+      (max > 0 && enrolled / max >= HOT_FILL_RATIO);
 
     candidates.push({
       entry: {
@@ -283,18 +298,26 @@ const buildManifest = async (
     if (candidate.group === "undergrad" && undergradRank++ < HOT_BY_VIEWS) {
       candidate.group = "hot";
     }
+  }
+  const shelved = withIndependentStudyLowest(candidates.map((c) => c.entry));
+  shelved.forEach((entry, index) => {
+    const candidate = candidates[index];
+    candidate.entry = entry;
+    if (entry.lowest) candidate.group = "lowest";
     const group = GROUPS[candidate.group];
     candidate.entry.tier = group.tier;
     candidate.entry.minIntervalSec = group.minIntervalSec;
     candidate.entry.maxIntervalSec = group.maxIntervalSec;
-  }
+    if (entry.lowest) candidate.entry.lowest = true;
+  });
 
   const count = (g: keyof typeof GROUPS) =>
     candidates.filter((c) => c.group === g).length;
   const lectureOnly = candidates.filter((c) => !c.entry.associated).length;
   log.info(
     `Manifest: ${candidates.length} ${semester} ${year} classes ` +
-      `(hot ${count("hot")}, undergrad ${count("undergrad")}, grad ${count("grad")}; ` +
+      `(hot ${count("hot")}, undergrad ${count("undergrad")}, grad ${count("grad")}, ` +
+      `lowest ${count("lowest")}; ` +
       `${lectureOnly} without labs/discussions; skipped ${independentStudy} independent study)`
   );
   return {
@@ -315,7 +338,9 @@ const publishManifestIfStale = async (
     return;
   }
   const termName = `${term.year} ${term.semester}`;
-  const status = await EnrollmentWorkerSyncModel.findOne({ key: SYNC_KEY }).lean();
+  const status = await EnrollmentWorkerSyncModel.findOne({
+    key: SYNC_KEY,
+  }).lean();
   const age = status?.manifestPublishedAt
     ? Date.now() - new Date(status.manifestPublishedAt).getTime()
     : Number.POSITIVE_INFINITY;
@@ -379,7 +404,10 @@ const listNewBatchKeys = async (
   return keys.sort();
 };
 
-const importBatch = async (batch: EnrollmentWorkerBatch, log: Config["log"]) => {
+const importBatch = async (
+  batch: EnrollmentWorkerBatch,
+  log: Config["log"]
+) => {
   const patchesByTerm = new Map<string, Map<string, CatalogEnrollmentPatch>>();
   let applied = 0;
 
@@ -409,7 +437,8 @@ const importBatch = async (batch: EnrollmentWorkerBatch, log: Config["log"]) => 
         );
         const termKey = `${key.year}|${key.semester}`;
         const termPatches = patchesByTerm.get(termKey) ?? new Map();
-        for (const { sectionId, patch } of patches) termPatches.set(sectionId, patch);
+        for (const { sectionId, patch } of patches)
+          termPatches.set(sectionId, patch);
         patchesByTerm.set(termKey, termPatches);
         applied += 1;
       } catch (error) {
@@ -438,7 +467,9 @@ export const syncEnrollmentFromAws = async (config: Config) => {
 
   await publishManifestIfStale(s3, bucket, log);
 
-  const status = await EnrollmentWorkerSyncModel.findOne({ key: SYNC_KEY }).lean();
+  const status = await EnrollmentWorkerSyncModel.findOne({
+    key: SYNC_KEY,
+  }).lean();
   const keys = await listNewBatchKeys(s3, bucket, status?.cursor ?? null);
   if (!keys.length) {
     log.info("No new enrollment batches");
@@ -447,7 +478,9 @@ export const syncEnrollmentFromAws = async (config: Config) => {
 
   let classes = 0;
   for (const key of keys) {
-    const res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+    const res = await s3.send(
+      new GetObjectCommand({ Bucket: bucket, Key: key })
+    );
     const batch = JSON.parse(
       gunzipSync(await res.Body!.transformToByteArray()).toString("utf8")
     ) as EnrollmentWorkerBatch;
@@ -460,7 +493,9 @@ export const syncEnrollmentFromAws = async (config: Config) => {
     );
   }
 
-  log.info(`Imported ${classes} class enrollment snapshot(s) from ${keys.length} batch(es)`);
+  log.info(
+    `Imported ${classes} class enrollment snapshot(s) from ${keys.length} batch(es)`
+  );
   await invalidateBackendCaches(config.BACKEND_URL, log);
 };
 

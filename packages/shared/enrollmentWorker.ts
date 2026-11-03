@@ -37,6 +37,12 @@ export type EnrollmentWorkerClass = {
   minIntervalSec: number;
   /** Slowest refresh once a class has stopped changing. */
   maxIntervalSec: number;
+  /**
+   * Fetched only after every other due class, on the slow independent-study
+   * interval. Tutorials, supervised research, and other one-section-per-sponsor
+   * listings.
+   */
+  lowest?: boolean;
 };
 
 export type EnrollmentWorkerManifest = {
@@ -166,8 +172,8 @@ export type EnrollmentWorkerLiveStatus = {
 /**
  * Independent study / research / field study / individual exam prep (99, 197,
  * 199, 299, 399, 499, 601, 602, incl. variants like H199 or 299A): one section
- * per instructor, so not worth polling. The datapuller leaves them out of the
- * manifest; the worker also treats any that slip in as lowest priority.
+ * per instructor. The datapuller leaves these out of the manifest; the worker
+ * also treats any that slip in as lowest priority.
  */
 export const INDEPENDENT_STUDY_NUMBERS =
   /^[A-Z]*(99|197|199|299|399|499|601|602)[A-Z]?$/;
@@ -175,20 +181,73 @@ export const INDEPENDENT_STUDY_NUMBERS =
 export const isIndependentStudyNumber = (courseNumber: string) =>
   INDEPENDENT_STUDY_NUMBERS.test(courseNumber.toUpperCase());
 
-/** Refresh bounds for independent study that reaches the worker. */
+/**
+ * Graduate group study (298) and supervised teaching (300). Departments list
+ * one section per faculty, the same shape as independent study.
+ */
+export const MASS_INDIVIDUAL_NUMBERS = /^(298|300)[A-Z]?$/;
+
+/**
+ * Reading & composition and directed group study (98/198, including 198BC)
+ * are real classes students enroll in, even when a department offers many
+ * sections. They stay on the normal schedule.
+ */
+const READING_COMPOSITION_NUMBERS = /^R[145][AB]$/;
+const DIRECTED_GROUP_STUDY_NUMBERS = /^(98|198)[A-Z]*$/;
+
+/** Components that, in bulk, are one section per sponsor rather than a course. */
+const MASS_SECTION_COMPONENTS = new Set(["SEM", "COL", "GRP", "TUT"]);
+/** One subject+number with at least this many of those sections is shelved. */
+const MASS_SECTION_COUNT = 20;
+
+/** Refresh bounds for individual instruction and other bulk section shells. */
 export const INDEPENDENT_STUDY_TIER = {
-  tier: "Independent study (lowest priority)",
+  tier: "Lowest: tutorial, supervised research, group study",
   minIntervalSec: 24 * 60 * 60,
   maxIntervalSec: 7 * 24 * 60 * 60,
 } as const;
 
-/** Apply the lowest tier to independent study entries of a manifest. */
+const componentFromCatalogUrl = (url: string | undefined) =>
+  url?.match(/-([a-z]{2,3})-[^-]+$/i)?.[1].toUpperCase();
+
+/**
+ * Apply the lowest tier to individual instruction and to courses listed as
+ * dozens of near-duplicate sections (UGIS 192 tutorials, 298 group study,
+ * research-review seminars, supervised teaching).
+ */
 export const withIndependentStudyLowest = (
   classes: EnrollmentWorkerClass[]
-): (EnrollmentWorkerClass & { lowest?: boolean })[] =>
-  classes.map((c) => {
-    const key = decodeEnrollmentWorkerClassId(c.id);
-    return key && isIndependentStudyNumber(key.courseNumber)
+): (EnrollmentWorkerClass & { lowest?: boolean })[] => {
+  const parsed = classes.map((c) => ({
+    c,
+    key: decodeEnrollmentWorkerClassId(c.id),
+    component: componentFromCatalogUrl(c.urls[0]),
+  }));
+  const massCounts = new Map<string, number>();
+  for (const { key, component } of parsed) {
+    if (!key || !component || !MASS_SECTION_COMPONENTS.has(component)) continue;
+    const courseNumber = key.courseNumber.toUpperCase();
+    if (
+      READING_COMPOSITION_NUMBERS.test(courseNumber) ||
+      DIRECTED_GROUP_STUDY_NUMBERS.test(courseNumber)
+    ) {
+      continue;
+    }
+    const id = `${key.subject}|${courseNumber}`;
+    massCounts.set(id, (massCounts.get(id) ?? 0) + 1);
+  }
+  return parsed.map(({ c, key, component }) => {
+    if (!key) return c;
+    const courseNumber = key.courseNumber.toUpperCase();
+    const individual =
+      isIndependentStudyNumber(courseNumber) ||
+      component === "TUT" ||
+      MASS_INDIVIDUAL_NUMBERS.test(courseNumber);
+    const mass =
+      (massCounts.get(`${key.subject}|${courseNumber}`) ?? 0) >=
+      MASS_SECTION_COUNT;
+    return individual || mass
       ? { ...c, ...INDEPENDENT_STUDY_TIER, lowest: true }
       : c;
   });
+};
