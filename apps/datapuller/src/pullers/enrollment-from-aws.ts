@@ -52,7 +52,7 @@ const MANIFEST_MAX_AGE_MS = 60 * 60_000;
  * Bump when buildManifest's rules change, so a restarted datapuller
  * republishes right away instead of waiting out MANIFEST_MAX_AGE_MS.
  */
-const MANIFEST_RULES_VERSION = 3;
+const MANIFEST_RULES_VERSION = 4;
 /** Cross-listing pages to fall back on when the primary listing is 0/0. */
 const MAX_URLS_PER_CLASS = 3;
 
@@ -66,8 +66,15 @@ const HOUR = 60 * MIN;
  * minutes, so polling faster than that only re-reads the same cached copy.
  */
 const GROUPS = {
+  // A full or waitlisted class stays on a short interval. Its numbers look
+  // stable right up until someone drops, which is the change worth catching.
+  full: {
+    tier: "Full or waitlisted",
+    minIntervalSec: 15 * MIN,
+    maxIntervalSec: 30 * MIN,
+  },
   hot: {
-    tier: "Hot: waitlisted, ≥90% full, most viewed or just refreshed",
+    tier: "Hot: most viewed or just refreshed",
     minIntervalSec: 15 * MIN,
     maxIntervalSec: 2 * HOUR,
   },
@@ -77,7 +84,7 @@ const GROUPS = {
     maxIntervalSec: 2 * HOUR,
   },
   grad: {
-    tier: "Grad / professional / no capacity",
+    tier: "Grad / professional with open seats, or no listed capacity",
     minIntervalSec: 6 * HOUR,
     maxIntervalSec: 24 * HOUR,
   },
@@ -281,12 +288,12 @@ const buildManifest = async (
         maxIntervalSec: 0,
       },
       score: popularityScore(c),
-      group: recentlyRefreshed.has(`${courseKey(c)}|${c.number}`)
-        ? "hot"
-        : catalogLevel(c.courseNumber) >= 200 || confirmedNoCapacity
-          ? "grad"
-          : urgent
-            ? "hot"
+      group: urgent
+        ? "full"
+        : recentlyRefreshed.has(`${courseKey(c)}|${c.number}`)
+          ? "hot"
+          : catalogLevel(c.courseNumber) >= 200 || confirmedNoCapacity
+            ? "grad"
             : "undergrad",
     });
   }
@@ -316,8 +323,8 @@ const buildManifest = async (
   const lectureOnly = candidates.filter((c) => !c.entry.associated).length;
   log.info(
     `Manifest: ${candidates.length} ${semester} ${year} classes ` +
-      `(hot ${count("hot")}, undergrad ${count("undergrad")}, grad ${count("grad")}, ` +
-      `lowest ${count("lowest")}; ` +
+      `(full ${count("full")}, hot ${count("hot")}, undergrad ${count("undergrad")}, ` +
+      `grad ${count("grad")}, lowest ${count("lowest")}; ` +
       `${lectureOnly} without labs/discussions; skipped ${independentStudy} independent study)`
   );
   return {
