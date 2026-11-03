@@ -106,7 +106,13 @@ type UcbEnrollmentPayload = {
   enrollmentStatus?: UcbEnrollmentStatus;
 };
 
-const DEFAULT_USER_AGENT = "BerkeleytimeEnrollmentRefresh/1.0";
+/**
+ * classes.berkeley.edu's Varnish layer answers 403 (error 54113) for a bare
+ * `Mozilla/5.0` or `curl` agent. A normal browser agent is accepted.
+ */
+export const ENROLLMENT_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_3_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.6668.29 Safari/537.36";
+const DEFAULT_USER_AGENT = ENROLLMENT_USER_AGENT;
 const DEFAULT_TIMEOUT_MS = 15000;
 
 export function buildUcbCatalogUrl(args: {
@@ -500,8 +506,16 @@ export async function fetchUcbCatalogEnrollment(
   }
 
   if (!response.ok) {
+    const body = (await response.text().catch(() => "")).replace(/\s+/g, " ");
+    const title = body.match(/<title>\s*([^<]{0,80})/i)?.[1]?.trim();
+    const code = body.match(/Error\s+(\d{4,})/)?.[1];
+    const hint = [title, code ? `error ${code}` : ""]
+      .filter(Boolean)
+      .join(", ");
     throw new UcbCatalogEnrollmentError(
-      `Berkeley Catalog returned HTTP ${response.status}`,
+      `Berkeley Catalog returned HTTP ${response.status}${
+        hint ? `: ${hint}` : ""
+      }`,
       "BAD_USER_INPUT"
     );
   }

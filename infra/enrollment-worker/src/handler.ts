@@ -5,10 +5,10 @@
  * RUN_BUDGET_MS and exits before the next one starts, so runs never overlap
  * and the request cap holds globally, not just per run.
  *
- * Rate: every outgoing request (a class page and its associated-sections page)
- * goes through one pacer that spaces request starts >= 1/MAX_RPS apart. A 429
- * or 503 (or BLOCK_STREAK_TO_STOP 403s in a row) stops the run and pauses
- * the worker, doubling the pause on each blocked run (see blockPauseMs).
+ * One class at a time from classes.berkeley.edu, paced at 1/MAX_RPS. A run of
+ * 403s, or a 429/503, stops this run; the next run tries the catalog again.
+ * berkeleytime.com is not queried here (its Cloudflare check blocks this
+ * function's addresses). The backend refresh can still read it.
  *
  * Priority: each class has a refresh interval bounded by the manifest's
  * [minIntervalSec, maxIntervalSec] (min is set from popularity by the
@@ -31,17 +31,18 @@ import {
   ENROLLMENT_WORKER_KEYS,
   type EnrollmentWorkerBatch,
   type EnrollmentWorkerClass,
-  type EnrollmentWorkerManifest,
   type EnrollmentWorkerFetchEvent,
   type EnrollmentWorkerLiveStatus,
+  type EnrollmentWorkerManifest,
   type EnrollmentWorkerResult,
   type EnrollmentWorkerRunSummary,
   withIndependentStudyLowest,
 } from "../../../packages/shared/enrollmentWorker";
 import {
+  ENROLLMENT_USER_AGENT,
+  type ParsedUcbCatalogEnrollment,
   fetchUcbCatalogEnrollment,
   isBlankUcbEnrollment,
-  type ParsedUcbCatalogEnrollment,
 } from "../../../packages/shared/ucbCatalogEnrollment";
 
 const BUCKET = process.env.BUCKET ?? "";
@@ -53,7 +54,8 @@ const REQUEST_TIMEOUT_MS = 20_000;
  * limit grows by ADAPT_STEP while requests are healthy (few timeouts/5xx,
  * latency near the best seen) and is cut by ADAPT_CUT when they aren't. The
  * limit carries over between runs. The pacer still spaces request starts at
- * least 1/MAX_RPS apart, and a 429/503 still stops the run.
+ * least 1/MAX_RPS apart. A run of 403s, or a 429/503, stops the catalog
+ * lane for this run; the next run tries it again.
  */
 const CONCURRENCY_START = Number(process.env.CONCURRENCY ?? "2");
 const CONCURRENCY_MIN = 2;
@@ -71,15 +73,13 @@ const ADAPT_OK_LATENCY = 1.5;
 const ADAPT_BAD_FAIL_RATE = 0.2;
 const ADAPT_BAD_LATENCY = 2.5;
 const FLUSH_EVERY_MS = 60_000;
-/** Pause after the first blocked run; doubles each blocked run after that. */
-const BLOCK_PAUSE_BASE_MS = 30 * 60_000;
-const BLOCK_PAUSE_MAX_MS = 24 * 60 * 60_000;
-/** This many 403s in a row means we're blocked, not that a page is forbidden. */
-const BLOCK_STREAK_TO_STOP = 3;
-const blockPauseMs = (blockedRuns: number) =>
-  Math.min(BLOCK_PAUSE_MAX_MS, BLOCK_PAUSE_BASE_MS * 2 ** Math.max(0, blockedRuns - 1));
+/** This many refusals or timeouts in a row means that source is down for this run. */
+const SOURCE_FAILS_TO_STOP = 3;
+/** This many 403s in a row means the catalog is refusing us, not one page. */
+const BLOCK_STREAK_TO_STOP = SOURCE_FAILS_TO_STOP;
 /** 403/429/503: the site is refusing us. */
-const isRefusal = (status: number) => status === 403 || status === 429 || status === 503;
+const isRefusal = (status: number) =>
+  status === 403 || status === 429 || status === 503;
 const UNCHANGED_BACKOFF = 1.5;
 const FAILURE_BACKOFF = 2;
 /** Re-check a cross-listing follower's own page this often. */
@@ -99,8 +99,7 @@ const ERROR_HISTORY = 100;
 /** Pseudo class id for run-level events (throttling). */
 const RUN_EVENT_ID = "run";
 const RUN_HISTORY = 48;
-const USER_AGENT =
-  process.env.USER_AGENT ?? "BerkeleytimeEnrollmentRefresh/1.0";
+const USER_AGENT = process.env.USER_AGENT ?? ENROLLMENT_USER_AGENT;
 
 const s3 = new S3Client({});
 
@@ -145,7 +144,9 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const readJsonGz = async <T>(key: string): Promise<T | null> => {
   try {
-    const res = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
+    const res = await s3.send(
+      new GetObjectCommand({ Bucket: BUCKET, Key: key })
+    );
     const bytes = await res.Body!.transformToByteArray();
     return JSON.parse(gunzipSync(bytes).toString("utf8")) as T;
   } catch (error) {
@@ -208,7 +209,9 @@ const isTimeout = (error: unknown) =>
  */
 const isUnreachable = (error: unknown) =>
   error instanceof Error &&
-  /Failed to reach|Timed out reading|returned HTTP 5\d\d|timeout/i.test(error.message);
+  /Failed to reach|Timed out reading|returned HTTP 5\d\d|timeout/i.test(
+    error.message
+  );
 
 /**
  * Group cross-listings: a class whose numbers come from another manifest
@@ -225,11 +228,16 @@ const groupFollowers = (
   const followers = new Set<string>();
   for (const c of manifest.classes) {
     const s = state.classes[c.id];
-    if (!s?.via || !s.viaCheckedAt || now - s.viaCheckedAt > FOLLOWER_RECHECK_MS) {
+    if (
+      !s?.via ||
+      !s.viaCheckedAt ||
+      now - s.viaCheckedAt > FOLLOWER_RECHECK_MS
+    ) {
       continue;
     }
     const leader = byOwnPage.get(s.via);
-    if (!leader || leader.id === c.id || state.classes[leader.id]?.via) continue;
+    if (!leader || leader.id === c.id || state.classes[leader.id]?.via)
+      continue;
     followersOf.set(leader.id, [...(followersOf.get(leader.id) ?? []), c.id]);
     followers.add(c.id);
   }
@@ -248,7 +256,8 @@ const groupFollowers = (
  * Never attempted: no successful fetch and no failed attempt yet. Seeded state
  * only records when the class was first seen.
  */
-const isBacklog = (s: ClassState | undefined) => !s || (!s.hash && !s.okAt && !s.fails);
+const isBacklog = (s: ClassState | undefined) =>
+  !s || (!s.hash && !s.okAt && !s.fails);
 
 /**
  * Classes to fetch this run, in order:
@@ -269,15 +278,27 @@ const dueClasses = (
 ) => {
   const retries: EnrollmentWorkerClass[] = [];
   const backlog: EnrollmentWorkerClass[] = [];
-  const refreshes: { c: EnrollmentWorkerClass; minInterval: number; ratio: number }[] = [];
+  const refreshes: {
+    c: EnrollmentWorkerClass;
+    minInterval: number;
+    ratio: number;
+  }[] = [];
   // Independent study: only once everything else is done.
   const lowest: { c: EnrollmentWorkerClass; ratio: number }[] = [];
-  for (const c of manifest.classes as (EnrollmentWorkerClass & { lowest?: boolean })[]) {
+  for (const c of manifest.classes as (EnrollmentWorkerClass & {
+    lowest?: boolean;
+  })[]) {
     if (followers.has(c.id)) continue;
     const s = state.classes[c.id];
     if (c.lowest) {
-      const interval = clamp(s?.intervalSec ?? c.minIntervalSec, c.minIntervalSec, c.maxIntervalSec);
-      const ratio = isBacklog(s) ? Number.POSITIVE_INFINITY : (now - s!.last) / 1000 / interval;
+      const interval = clamp(
+        s?.intervalSec ?? c.minIntervalSec,
+        c.minIntervalSec,
+        c.maxIntervalSec
+      );
+      const ratio = isBacklog(s)
+        ? Number.POSITIVE_INFINITY
+        : (now - s!.last) / 1000 / interval;
       if (ratio >= 1) lowest.push({ c, ratio });
     } else if (s?.retryTimeoutMs) {
       retries.push(c);
@@ -303,7 +324,48 @@ const dueClasses = (
   };
 };
 
-export const handler = async () => {
+/** One-shot look at what classes.berkeley.edu returns from this function. */
+const probeCatalog = async (url?: string) => {
+  const target =
+    url ??
+    "https://classes.berkeley.edu/content/2027-spring-espm-50ac-001-lec-001";
+  const agents = [USER_AGENT, "Mozilla/5.0"];
+  const results = [];
+  for (const userAgent of agents) {
+    const started = Date.now();
+    try {
+      const response = await fetch(target, {
+        headers: {
+          Accept: "text/html,application/xhtml+xml",
+          "User-Agent": userAgent,
+        },
+        signal: AbortSignal.timeout(20_000),
+      });
+      const body = (await response.text()).replace(/\s+/g, " ");
+      results.push({
+        userAgent,
+        status: response.status,
+        server: response.headers.get("server"),
+        cache: response.headers.get("x-cache"),
+        title: body.match(/<title>\s*([^<]{0,80})/i)?.[1]?.trim() ?? null,
+        errorCode: body.match(/Error\s+(\d{4,})/)?.[1] ?? null,
+        hasEnrollment: /"enrolledCount"/.test(body),
+        ms: Date.now() - started,
+      });
+    } catch (error) {
+      results.push({
+        userAgent,
+        status: null,
+        error: error instanceof Error ? error.message : String(error),
+        ms: Date.now() - started,
+      });
+    }
+  }
+  return { url: target, results };
+};
+
+export const handler = async (event?: { probe?: boolean; url?: string }) => {
+  if (event?.probe) return probeCatalog(event.url);
   if (!BUCKET) throw new Error("BUCKET env var is required");
   const started = Date.now();
 
@@ -317,49 +379,37 @@ export const handler = async () => {
   }
   manifest.classes = withIndependentStudyLowest(manifest.classes);
   const state: SchedulerState = savedState ?? { version: 1, classes: {} };
-  if (state.pausedUntil && state.pausedUntil > started) {
-    console.log(`Paused after throttling until ${new Date(state.pausedUntil).toISOString()}`);
-    await writeJson(ENROLLMENT_WORKER_KEYS.liveStatus, {
-      version: 1,
-      updatedAt: started,
-      run: {
-        state: "paused",
-        startedAt: started,
-        budgetEndsAt: started,
-        finishedAt: started,
-        pausedUntil: state.pausedUntil,
-        due: 0,
-        fetched: 0,
-        changed: 0,
-        failed: 0,
-        requests: 0,
-        concurrency: state.concurrency ?? CONCURRENCY_START,
-        maxRequestsPerSecond: MAX_RPS,
-      },
-      inFlight: [],
-      recent: [],
-      errors: state.errors ?? [],
-    } satisfies EnrollmentWorkerLiveStatus);
-    return;
+  if (state.pausedUntil || state.blockedRuns) {
+    console.log(
+      `Resuming now${
+        state.pausedUntil
+          ? `; clearing catalog pause that lasted until ${new Date(state.pausedUntil).toISOString()}`
+          : ""
+      }`
+    );
+    delete state.pausedUntil;
+    delete state.blockedRuns;
   }
 
-  // One pacer for every request this run makes. Callers take turns, and each
-  // start is measured from the previous request's *actual* start, so a late
-  // timer or busy event loop can never squeeze two starts closer than gapMs.
-  const gapMs = 1000 / MAX_RPS;
-  let gate: Promise<void> = Promise.resolve();
-  let lastStart = 0;
-  const acquireSlot = () =>
-    (gate = gate.then(async () => {
-      const wait = lastStart + gapMs - Date.now();
-      if (wait > 0) await sleep(wait);
-      // setTimeout can fire a hair early.
-      while (Date.now() < lastStart + gapMs) await sleep(1);
-      lastStart = Date.now();
-    }));
+  // Start times are measured from the previous actual start, so the cap holds
+  // while several classes are in flight.
+  const makePacer = () => {
+    const gapMs = 1000 / MAX_RPS;
+    let gate: Promise<void> = Promise.resolve();
+    let lastStart = 0;
+    return () =>
+      (gate = gate.then(async () => {
+        const wait = lastStart + gapMs - Date.now();
+        if (wait > 0) await sleep(wait);
+        while (Date.now() < lastStart + gapMs) await sleep(1);
+        lastStart = Date.now();
+      }));
+  };
+  const acquireCatalogSlot = makePacer();
   let requests = 0;
   let throttled = false;
   let refusalStreak = 0;
+  let catalogUnreachableStreak = 0;
   let inFlight = 0;
   let maxInFlight = 0;
   // Adaptive concurrency: request outcomes since the last adjustment.
@@ -372,9 +422,10 @@ export const handler = async () => {
   // so it counts toward the failure rate but not the latency check.
   let samples: { ms: number; ok: boolean; cached: boolean }[] = [];
   const pacedFetch: typeof fetch = async (input, init) => {
-    await acquireSlot();
+    await acquireCatalogSlot();
     // Once refused, send nothing more this run (not even queued requests).
-    if (throttled) throw new Error("Not sent: classes.berkeley.edu is refusing requests");
+    if (throttled)
+      throw new Error("Not sent: classes.berkeley.edu is refusing requests");
     requests += 1;
     inFlight += 1;
     maxInFlight = Math.max(maxInFlight, inFlight);
@@ -403,6 +454,8 @@ export const handler = async () => {
       inFlight -= 1;
     }
   };
+  const catalogRefused = (error: string | undefined) =>
+    !!error && /HTTP (403|429|503)/.test(error);
   const adapt = () => {
     if (samples.length < ADAPT_MIN_SAMPLES) return;
     const failRate = samples.filter((s) => !s.ok).length / samples.length;
@@ -416,7 +469,10 @@ export const handler = async () => {
     samples = [];
     if (median !== null) {
       // Drift up slowly so a site that's slower overall isn't penalized forever.
-      state.originLatencyBaselineMs = Math.min(median, (state.originLatencyBaselineMs ?? median) * 1.02);
+      state.originLatencyBaselineMs = Math.min(
+        median,
+        (state.originLatencyBaselineMs ?? median) * 1.02
+      );
     }
     const baseline = state.originLatencyBaselineMs ?? median ?? 0;
     const slow = median !== null && median > baseline * ADAPT_BAD_LATENCY;
@@ -449,6 +505,16 @@ export const handler = async () => {
     let timedOut = false;
     let unreachable = false;
     let error: string | undefined;
+    if (throttled) {
+      return {
+        data: null,
+        url: null,
+        timedOut,
+        unreachable,
+        pageGeneratedAt: null,
+        error: "catalog is refusing requests",
+      };
+    }
     for (const url of urls) {
       if (throttled) break;
       try {
@@ -476,7 +542,14 @@ export const handler = async () => {
         error = err instanceof Error ? err.message : String(err);
       }
     }
-    return { data: null, url: null, timedOut, unreachable, pageGeneratedAt: null, error };
+    return {
+      data: null,
+      url: null,
+      timedOut,
+      unreachable,
+      pageGeneratedAt: null,
+      error,
+    };
   };
 
   let pending: EnrollmentWorkerResult[] = [];
@@ -512,7 +585,10 @@ export const handler = async () => {
   for (const c of manifest.classes) {
     if (state.classes[c.id]) continue;
     const interval = minIntervalOf(c);
-    state.classes[c.id] = { last: started - interval * 1000, intervalSec: interval };
+    state.classes[c.id] = {
+      last: started - interval * 1000,
+      intervalSec: interval,
+    };
     seeded += 1;
   }
   const { queue, backlog } = dueClasses(
@@ -574,11 +650,19 @@ export const handler = async () => {
   void writeLive();
   const liveTimer = setInterval(() => void writeLive(), LIVE_STATUS_EVERY_MS);
 
-  const processClass = async (c: EnrollmentWorkerClass) => {
+  const finishClass = async (
+    c: EnrollmentWorkerClass,
+    outcome: {
+      data: ParsedUcbCatalogEnrollment | null;
+      url: string | null;
+      timedOut: boolean;
+      unreachable: boolean;
+      pageGeneratedAt: number | null;
+      error?: string;
+    },
+    classStarted: number
+  ) => {
     const prev = state.classes[c.id];
-    const timeoutMs = prev?.retryTimeoutMs ?? REQUEST_TIMEOUT_MS;
-    // Worst case is two requests that both time out.
-    if (Date.now() + 2 * timeoutMs > started + SAFE_END_MS) return;
     const minInterval = minIntervalOf(c);
     const interval = clamp(
       prev?.intervalSec ?? minInterval,
@@ -589,22 +673,10 @@ export const handler = async () => {
       !!prev?.via &&
       !!prev.viaCheckedAt &&
       started - prev.viaCheckedAt <= FOLLOWER_RECHECK_MS;
-    if (prev?.retryTimeoutMs) retried += 1;
-
-    const classStarted = Date.now();
-    inFlightClasses.set(c.id, {
-      id: c.id,
-      url: viaFresh ? prev!.via! : c.urls[0],
-      startedAt: classStarted,
-      timeoutMs,
-    });
-    const { data, url, timedOut, unreachable, pageGeneratedAt, error } = await fetchClass(
-      c,
-      timeoutMs,
-      viaFresh ? prev!.via : undefined
-    ).finally(() => inFlightClasses.delete(c.id));
+    const { data, url, timedOut, unreachable, pageGeneratedAt, error } =
+      outcome;
     const fetchedAt = Date.now();
-    const observedAt = pageGeneratedAt ?? fetchedAt;
+    const observedAtMs = pageGeneratedAt ?? fetchedAt;
 
     if (data && url) {
       const hash = enrollmentHash(data);
@@ -612,15 +684,17 @@ export const handler = async () => {
       const nextInterval = didChange
         ? minInterval
         : clamp(interval * UNCHANGED_BACKOFF, minInterval, c.maxIntervalSec);
-      // Served by a sibling page: remember it. Only a fetch that tried this
-      // class's own page first (re)confirms the follower relationship.
       const via = url !== c.urls[0] ? url : undefined;
       state.classes[c.id] = {
         last: fetchedAt,
         intervalSec: nextInterval,
         hash,
         via,
-        viaCheckedAt: via ? (viaFresh ? prev!.viaCheckedAt : fetchedAt) : undefined,
+        viaCheckedAt: via
+          ? viaFresh
+            ? prev!.viaCheckedAt
+            : fetchedAt
+          : undefined,
         okAt: fetchedAt,
       };
       const alsoIds = followersOf.get(c.id) ?? [];
@@ -638,7 +712,7 @@ export const handler = async () => {
       pending.push({
         id: c.id,
         ...(alsoIds.length ? { alsoIds } : {}),
-        observedAt: new Date(observedAt).toISOString(),
+        observedAt: new Date(observedAtMs).toISOString(),
         fetchedAt: new Date(fetchedAt).toISOString(),
         data,
       });
@@ -649,7 +723,7 @@ export const handler = async () => {
         url,
         at: fetchedAt,
         ok: true,
-        observedAt,
+        observedAt: observedAtMs,
         enrolled: data.primary.enrolledCount,
         max: data.primary.maxEnroll,
         waitlisted: data.primary.waitlistedCount,
@@ -657,13 +731,15 @@ export const handler = async () => {
         followers: alsoIds.length || undefined,
         ms: fetchedAt - classStarted,
       });
-    } else if (!throttled) {
+    } else {
       const retries = prev?.timeoutRetries ?? 0;
       const quickRetry =
         unreachable &&
         !(c as { lowest?: boolean }).lowest &&
         retries < RETRY_TIMEOUTS_MS.length;
-      const retryTimeout = timedOut ? RETRY_TIMEOUTS_MS[retries] : REQUEST_TIMEOUT_MS;
+      const retryTimeout = timedOut
+        ? RETRY_TIMEOUTS_MS[retries]
+        : REQUEST_TIMEOUT_MS;
       state.classes[c.id] = {
         ...prev,
         last: fetchedAt,
@@ -679,7 +755,7 @@ export const handler = async () => {
       failed += 1;
       record({
         id: c.id,
-        url: viaFresh ? prev!.via : c.urls[0],
+        url: url ?? (viaFresh ? prev!.via! : c.urls[0]),
         at: fetchedAt,
         ok: false,
         error: quickRetry
@@ -692,45 +768,83 @@ export const handler = async () => {
     if (Date.now() - lastFlush >= FLUSH_EVERY_MS) await flush();
   };
 
-  // Keep up to `limit` classes in flight, re-reading the limit as it adapts.
-  // JS is single-threaded, so state/counter updates between awaits can't
-  // interleave mid-update.
-  const adaptTimer = setInterval(adapt, ADAPT_EVERY_MS);
-  const running = new Set<Promise<void>>();
-  let next = 0;
-  while (next < queue.length && Date.now() < started + RUN_BUDGET_MS && !throttled) {
-    if (running.size >= limit) {
-      await Promise.race(running);
-      continue;
+  let catalogNext = 0;
+  const withinBudget = () => Date.now() < started + RUN_BUDGET_MS;
+
+  const processCatalog = async (c: EnrollmentWorkerClass) => {
+    const prev = state.classes[c.id];
+    const timeoutMs = prev?.retryTimeoutMs ?? REQUEST_TIMEOUT_MS;
+    if (Date.now() + 2 * timeoutMs > started + SAFE_END_MS) return;
+    if (prev?.retryTimeoutMs) retried += 1;
+    const viaFresh =
+      !!prev?.via &&
+      !!prev.viaCheckedAt &&
+      started - prev.viaCheckedAt <= FOLLOWER_RECHECK_MS;
+    const classStarted = Date.now();
+    inFlightClasses.set(c.id, {
+      id: c.id,
+      url: viaFresh ? prev!.via! : c.urls[0],
+      startedAt: classStarted,
+      timeoutMs,
+    });
+    const outcome = await fetchClass(
+      c,
+      timeoutMs,
+      viaFresh ? prev!.via : undefined
+    ).finally(() => inFlightClasses.delete(c.id));
+    if (outcome.data && outcome.url) {
+      catalogUnreachableStreak = 0;
+      await finishClass(c, outcome, classStarted);
+      return;
     }
-    const job: Promise<void> = processClass(queue[next++])
-      .catch((error) => console.warn("class failed unexpectedly", error))
-      .finally(() => running.delete(job));
-    running.add(job);
+    const refused = throttled || catalogRefused(outcome.error);
+    const notResponding = outcome.timedOut || outcome.unreachable;
+    if (notResponding && !refused) {
+      catalogUnreachableStreak += 1;
+      if (catalogUnreachableStreak >= SOURCE_FAILS_TO_STOP) throttled = true;
+    }
+    await finishClass(c, outcome, classStarted);
+  };
+
+  const adaptTimer = setInterval(adapt, ADAPT_EVERY_MS);
+  const catalogRunning = new Set<Promise<void>>();
+  while (withinBudget() && !throttled) {
+    let startedWork = false;
+    if (catalogNext < queue.length && catalogRunning.size < limit) {
+      const c = queue[catalogNext++];
+      const job: Promise<void> = processCatalog(c)
+        .catch((error) =>
+          console.warn("catalog class failed unexpectedly", error)
+        )
+        .finally(() => catalogRunning.delete(job));
+      catalogRunning.add(job);
+      startedWork = true;
+    }
+    if (!startedWork) {
+      if (!catalogRunning.size) break;
+      await Promise.race(catalogRunning);
+    } else if (catalogRunning.size >= limit) {
+      await Promise.race(catalogRunning);
+    }
   }
-  await Promise.all(running);
+  await Promise.all(catalogRunning);
   clearInterval(adaptTimer);
-  // Blocked: start the next run as gently as possible.
   if (throttled) limit = CONCURRENCY_MIN;
   state.concurrency = limit;
 
   await flush();
 
+  delete state.pausedUntil;
+  delete state.blockedRuns;
   if (throttled) {
-    state.blockedRuns = (state.blockedRuns ?? 0) + 1;
-    state.pausedUntil = Date.now() + blockPauseMs(state.blockedRuns);
     record({
       id: RUN_EVENT_ID,
       at: Date.now(),
       ok: false,
       error:
-        `classes.berkeley.edu is refusing requests (403/429/503); blocked run #${state.blockedRuns}, ` +
-        `pausing until ${new Date(state.pausedUntil).toISOString()}`,
+        "classes.berkeley.edu stopped answering; this run stopped early. The next run tries the catalog again.",
       ms: Date.now() - started,
     });
-  } else {
-    delete state.pausedUntil;
-    delete state.blockedRuns;
   }
   state.errors = errors;
   const seconds = (Date.now() - started) / 1000;

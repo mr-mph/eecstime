@@ -8,6 +8,7 @@ import {
   NewEnrollmentHistoryModel,
   SectionModel,
 } from "@repo/common/models";
+import { fetchBerkeleytimeEnrollment } from "@repo/shared";
 
 import { Semester } from "../../generated-types/graphql";
 import { invalidateApolloResponseCache } from "../../utils/cache";
@@ -368,10 +369,14 @@ const scrapeEnrollmentForSection = async (
     const scraped = await fetchUcbCatalogEnrollment(url, redis);
     if (isBlankUcbEnrollment(scraped.primary)) return null;
     return scraped;
-  } catch {
+  } catch (error) {
+    if (isCatalogRefusal(error)) throw error;
     return null;
   }
 };
+
+const isCatalogRefusal = (error: unknown) =>
+  error instanceof GraphQLError && /HTTP (403|429|503)/.test(error.message);
 
 export const getEnrollment = async (
   year: number,
@@ -455,12 +460,35 @@ export const refreshClassEnrollment = async (
   const combinedSiblings = await findCombinedSiblingSections(
     primarySection as ISectionItem
   );
-  const scrapeCandidates = [primarySection as ISectionItem, ...combinedSiblings];
+  const scrapeCandidates = [
+    primarySection as ISectionItem,
+    ...combinedSiblings,
+  ];
 
   let scrapedCatalog = null;
   for (const candidate of scrapeCandidates) {
-    scrapedCatalog = await scrapeEnrollmentForSection(candidate, redis);
+    try {
+      scrapedCatalog = await scrapeEnrollmentForSection(candidate, redis);
+    } catch (error) {
+      if (isCatalogRefusal(error)) break;
+      throw error;
+    }
     if (scrapedCatalog) break;
+  }
+
+  if (!scrapedCatalog) {
+    try {
+      scrapedCatalog = await fetchBerkeleytimeEnrollment({
+        year,
+        semester,
+        sessionId: resolvedSessionId,
+        subject,
+        courseNumber,
+        number,
+      });
+    } catch {
+      scrapedCatalog = null;
+    }
   }
 
   if (!scrapedCatalog) {

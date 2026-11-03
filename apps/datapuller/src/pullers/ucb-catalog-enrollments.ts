@@ -5,10 +5,11 @@ import {
   ISectionItem,
   SectionModel,
   UCB_ENROLLMENT_SCRAPE_STATUS_KEY,
-  UcbEnrollmentScrapeStatusModel,
   type UcbEnrollmentScrapeState,
+  UcbEnrollmentScrapeStatusModel,
 } from "@repo/common/models";
 import {
+  ENROLLMENT_USER_AGENT,
   UcbCatalogEnrollmentError,
   buildUcbCatalogUrl,
   fetchUcbCatalogEnrollment,
@@ -29,7 +30,7 @@ const CATALOG_FLUSH_EVERY = 50;
 const PROGRESS_WRITE_EVERY = 5;
 const MAX_RETRIES = 4;
 const BASE_BACKOFF_MS = 500;
-const USER_AGENT = "BerkeleytimeUcbEnrollmentPuller/1.0";
+const USER_AGENT = ENROLLMENT_USER_AGENT;
 /** Skip classes scraped within this window so restarts don't re-query them. */
 const RECENT_SCRAPE_TTL_MS = 45 * 60 * 1000;
 /** Hard cap so one wedged class/fetch can't stall the whole pool forever. */
@@ -366,8 +367,9 @@ const scrapeTerm = async (config: Config, year: number, semester: string) => {
     ].slice(0, MAX_SCRAPE_CANDIDATES);
 
     const scrapeAndPersist = async (signal: { aborted: boolean }) => {
-      let scraped: Awaited<ReturnType<typeof fetchUcbCatalogEnrollment>> | null =
-        null;
+      let scraped: Awaited<
+        ReturnType<typeof fetchUcbCatalogEnrollment>
+      > | null = null;
 
       for (const candidate of scrapeCandidates) {
         if (signal.aborted) return;
