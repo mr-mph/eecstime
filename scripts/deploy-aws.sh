@@ -96,7 +96,7 @@ if [ -n "\$changed" ]; then
 fi
 
 # Build a new frontend release next to the live one, then switch the
-# `current` symlink atomically: visitors get the old or the new build, never
+# current symlink atomically: visitors get the old or the new build, never
 # a half-written one. Keeps the last 3 releases for quick rollback.
 SITE=/opt/eecstime-site
 first_static=false
