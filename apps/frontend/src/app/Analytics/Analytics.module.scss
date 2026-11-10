@@ -1,0 +1,136 @@
+.root {
+  // Single-series chart color (validated against both surfaces).
+  --visitors-color: var(--blue-600);
+
+  padding: 48px 24px;
+  min-height: calc(100vh - 200px);
+  background-color: var(--background-color);
+
+  @media (max-width: 768px) {
+    padding: 32px 16px;
+  }
+}
+
+:global(body[data-theme="dark"]) .root {
+  --visitors-color: var(--blue-500);
+}
+
+@media (prefers-color-scheme: dark) {
+  :global(body:not([data-theme])) .root {
+    --visitors-color: var(--blue-500);
+  }
+}
+
+.container {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.title {
+  font-size: 32px;
+  font-weight: var(--font-bold);
+  color: var(--heading-color);
+  margin: 0 0 6px;
+  line-height: 1.2;
+}
+
+.subtitle {
+  font-size: var(--text-14);
+  color: var(--label-color);
+  margin: 0 0 24px;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.tile,
+.card {
+  background-color: var(--foreground-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.tile {
+  padding: 14px 16px;
+}
+
+.value {
+  margin: 0;
+  font-size: var(--text-28);
+  font-weight: var(--font-semibold);
+  color: var(--heading-color);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.label {
+  margin: 4px 0 0;
+  font-size: var(--text-12);
+  color: var(--label-color);
+}
+
+.card {
+  padding: 16px 16px 12px;
+  margin-bottom: 16px;
+}
+
+.heading {
+  margin: 0;
+  font-size: var(--text-16);
+  font-weight: var(--font-semibold);
+  color: var(--heading-color);
+}
+
+.caption {
+  margin: 2px 0 12px;
+  font-size: var(--text-12);
+  color: var(--label-color);
+}
+
+.chart {
+  width: 100%;
+}
+
+.table {
+  margin-top: 8px;
+  font-size: var(--text-12);
+  color: var(--paragraph-color);
+
+  summary {
+    cursor: pointer;
+    color: var(--label-color);
+    width: fit-content;
+
+    &:hover {
+      color: var(--heading-color);
+    }
+  }
+
+  table {
+    width: 100%;
+    margin-top: 8px;
+    border-collapse: collapse;
+    font-variant-numeric: tabular-nums;
+  }
+
+  th,
+  td {
+    text-align: left;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  th {
+    color: var(--label-color);
+    font-weight: var(--font-medium);
+  }
+
+  td:last-child,
+  th:last-child {
+    text-align: right;
+  }
+}

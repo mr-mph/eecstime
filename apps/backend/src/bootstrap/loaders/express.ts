@@ -13,6 +13,7 @@ import routeRedirectRoutes from "../../modules/route-redirect/routes";
 import semanticSearchRoutes from "../../modules/semantic-search/routes";
 import staffRoutes from "../../modules/staff/routes";
 import targetedMessageRoutes from "../../modules/targeted-message/routes";
+import presenceRoutes from "../../presence/routes";
 import passportLoader from "./passport";
 
 export default async (
@@ -85,6 +86,9 @@ export default async (
 
   // cache / datapuller helper routes (under BACKEND_PATH, e.g. /api/cache/...)
   cacheRoutes(app, redis);
+
+  // visitor counts for the header badge (/api/analytics/...)
+  presenceRoutes(app);
 
   // load staff routes
   staffRoutes(app);

@@ -35,3 +35,6 @@ generated-typedefs/
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+
+# Local visitor analytics (apps/backend/src/presence)
+apps/backend/data/

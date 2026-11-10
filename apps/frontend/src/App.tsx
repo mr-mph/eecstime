@@ -14,6 +14,7 @@ import Layout from "@/components/Layout";
 import RootWrapper from "@/components/RootWrapper";
 import SuspenseBoundary from "@/components/SuspenseBoundary";
 import UserProvider from "@/providers/UserProvider";
+import useVisitorHeartbeat from "@/hooks/useVisitorHeartbeat";
 
 const Landing = lazy(() => import("@/app/Landing"));
 const Profile = {
@@ -43,6 +44,7 @@ const DormRoom = lazy(() => import("@/app/Dorms/RoomViewer"));
 const CuratedClasses = lazy(() => import("@/app/CuratedClasses"));
 const Privacy = lazy(() => import("@/app/Legal/Privacy"));
 const Terms = lazy(() => import("@/app/Legal/Terms"));
+const Analytics = lazy(() => import("@/app/Analytics"));
 const Schedule = lazy(() => import("@/app/Schedule"));
 const Compare = lazy(() => import("@/app/Schedule/Comparison"));
 const Manage = lazy(() => import("@/app/Schedule/Editor"));
@@ -183,6 +185,14 @@ const router = createBrowserRouter([
             element: (
               <SuspenseBoundary key="terms">
                 <Terms />
+              </SuspenseBoundary>
+            ),
+          },
+          {
+            path: "analytics",
+            element: (
+              <SuspenseBoundary key="analytics">
+                <Analytics />
               </SuspenseBoundary>
             ),
           },
@@ -417,6 +427,8 @@ const client = new ApolloClient({
 });
 
 export default function App() {
+  useVisitorHeartbeat();
+
   return (
     <ApolloProvider client={client}>
       <UserProvider>
