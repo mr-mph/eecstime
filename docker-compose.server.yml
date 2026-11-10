@@ -1,0 +1,18 @@
+# EC2 server overrides, used on the server via COMPOSE_FILE in its .env:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.server.yml
+#
+# Serves the frontend as a static production build (built by
+# scripts/deploy-aws.sh into /opt/eecstime-site) through nginx, instead of
+# the Vite dev server. Local development is unchanged.
+services:
+  # Not used on the server; start it explicitly with --profile dev-frontend.
+  frontend:
+    profiles: ["dev-frontend"]
+
+  nginx:
+    depends_on: !override
+      backend:
+        condition: service_healthy
+    volumes: !override
+      - ./nginx.server.conf:/etc/nginx/conf.d/default.conf:ro
+      - /opt/eecstime-site:/srv/site:ro

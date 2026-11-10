@@ -31,8 +31,34 @@ async function forward(
   }
 }
 
+/**
+ * The catalog checks this on every visit. When the semantic-search service
+ * isn't running (it's an optional compose profile), fail fast and remember
+ * the failure briefly instead of making each visitor wait on a timeout.
+ */
+const HEALTH_TIMEOUT_MS = 1500;
+const HEALTH_FAILURE_TTL_MS = 60_000;
+let healthFailedAt = 0;
+
 router.get("/health", async (_req, res) => {
-  await forward(`${baseUrl}/health`, { method: "GET" }, res);
+  if (Date.now() - healthFailedAt < HEALTH_FAILURE_TTL_MS) {
+    res.status(503).json({ error: "Semantic search unavailable", indexes: [] });
+    return;
+  }
+  try {
+    const response = await fetch(`${baseUrl}/health`, {
+      method: "GET",
+      signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+    });
+    const raw = await response.text();
+    res
+      .status(response.status)
+      .type(response.headers.get("content-type") ?? "application/json")
+      .send(raw);
+  } catch {
+    healthFailedAt = Date.now();
+    res.status(503).json({ error: "Semantic search unavailable", indexes: [] });
+  }
 });
 
 router.post("/refresh", async (req, res) => {

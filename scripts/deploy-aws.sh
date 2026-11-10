@@ -5,12 +5,14 @@
 #
 # Runs the update on the instance through SSM (no SSH needed), keeping the
 # site up:
-#  - Code-only changes: check out origin/main; source folders are mounted into
-#    the dev containers, so Vite and the backend hot-reload. No restarts.
+#  - Frontend: served as a static production build (nginx.server.conf). Each
+#    frontend change builds a new release in /opt/eecstime-site/releases and
+#    switches the `current` symlink atomically; the last 3 are kept.
+#  - Backend: source is mounted into its container and hot-reloads. No restart.
 #  - Dependency/Dockerfile/compose changes: first build the new images from a
 #    separate checkout (/opt/eecstime-build) while the live site keeps running,
 #    then switch the code and recreate just the changed containers.
-#  - The datapuller restarts if its code changed; nginx reloads its config.
+#  - The datapuller restarts if its code changed.
 # Ends with a health check. The server's .env is untracked and never touched.
 #
 # Env overrides: AWS_REGION (default us-west-2), INSTANCE_ID (default: the
@@ -79,17 +81,16 @@ if \$rebuild; then
   (cd \$BUILD && docker compose -p eecstime build) >/tmp/deploy-build.log 2>&1 || { tail -30 /tmp/deploy-build.log; exit 1; }
 fi
 
-# Switch the live code. Source folders are mounted into the dev containers,
-# so Vite and the backend pick this up through hot reload.
+# Switch the live code. The backend's source is mounted into its container
+# and hot-reloads; the frontend is a static build (below).
 git checkout -q -f -B main "\$after"
 git branch -q -u origin/main
 
+# Serve the frontend as a static production build (docker-compose.server.yml,
+# nginx.server.conf) instead of the Vite dev server. One-time switch.
+grep -q '^COMPOSE_FILE=' .env || { echo "COMPOSE_FILE=docker-compose.yml:docker-compose.server.yml" >> .env; switched=true; }
+
 if \$rebuild; then
-  # Recreate only the containers whose image changed (a short restart).
-  echo "==> Swapping in rebuilt containers"
-  docker compose up -d >/tmp/deploy-compose.log 2>&1 || { tail -30 /tmp/deploy-compose.log; exit 1; }
-  # nginx resolves container addresses at startup; pick up the new ones.
-  docker compose exec -T nginx nginx -s reload >/dev/null 2>&1 || docker compose restart nginx >/dev/null 2>&1
   echo "==> npm install (dependencies changed)"
   npm install --no-audit --no-fund --loglevel=error >/tmp/deploy-npm.log 2>&1 || { tail -20 /tmp/deploy-npm.log; exit 1; }
 fi
@@ -98,14 +99,33 @@ if [ -n "\$changed" ]; then
   npx turbo run generate >/tmp/deploy-generate.log 2>&1 || { tail -20 /tmp/deploy-generate.log; exit 1; }
 fi
 
+# Build a new frontend release next to the live one, then switch the
+# `current` symlink atomically: visitors get the old or the new build, never
+# a half-written one. Keeps the last 3 releases for quick rollback.
+SITE=/opt/eecstime-site
+if [ ! -e \$SITE/current ] || echo "\$changed" | grep -qE '^(apps/frontend|packages)/|(^|/)package-lock\.json\$'; then
+  echo "==> Building frontend release"
+  release=\$(date -u +%Y%m%d%H%M%S)-\${after:0:9}
+  mkdir -p \$SITE/releases
+  (cd apps/frontend && npx vite build --outDir \$SITE/releases/\$release --emptyOutDir --logLevel error) >/tmp/deploy-vite.log 2>&1 || { tail -30 /tmp/deploy-vite.log; exit 1; }
+  ln -sfn releases/\$release \$SITE/current.tmp && mv -Tf \$SITE/current.tmp \$SITE/current
+  ls -1dt \$SITE/releases/* | tail -n +4 | xargs -r rm -rf
+fi
+
+if \$rebuild || [ "\${switched:-false}" = true ] || echo "\$changed" | grep -qE '^(nginx\.server\.conf|docker-compose\.server\.yml)\$'; then
+  # Recreate only containers whose image or config changed (a short restart).
+  echo "==> Applying container changes"
+  docker compose up -d >/tmp/deploy-compose.log 2>&1 || { tail -30 /tmp/deploy-compose.log; exit 1; }
+  # A single-file bind mount keeps the old nginx.server.conf after checkout.
+  echo "\$changed" | grep -qE '^nginx\.server\.conf\$' && docker compose up -d --force-recreate --no-deps nginx >/dev/null 2>&1
+  # The Vite dev server isn't used on the server any more.
+  docker rm -f eecstime-frontend-1 >/dev/null 2>&1 || true
+fi
+
 # Background jobs only; visitors never notice.
 if echo "\$changed" | grep -qE '^(apps/datapuller|packages|scripts)/'; then
   echo "==> Restarting datapuller"
   docker compose restart datapuller >/dev/null 2>&1
-fi
-if echo "\$changed" | grep -qE '^nginx\.conf\$'; then
-  echo "==> Reloading nginx config"
-  docker compose exec -T nginx nginx -s reload >/dev/null 2>&1
 fi
 
 echo "==> Health check"
