@@ -173,22 +173,6 @@ export default function NavigationBar({
                   </NavLink>
                 </motion.div>
               ))}
-              <motion.div
-                variants={{
-                  hidden: { opacity: 0, y: 20 },
-                  visible: { opacity: 1, y: 0 },
-                }}
-                transition={{ duration: 0.3 }}
-              >
-                <a
-                  className={styles.menuMadeBy}
-                  href="https://sethw.dev"
-                  target="_blank"
-                  rel="noopener"
-                >
-                  made with ♥︎ by Seth
-                </a>
-              </motion.div>
             </motion.nav>
           </motion.div>,
           document.body
@@ -205,14 +189,6 @@ export default function NavigationBar({
         <Link className={styles.brand} to="/">
           EECStime
         </Link>
-        <a
-          className={styles.madeBy}
-          href="https://sethw.dev"
-          target="_blank"
-          rel="noopener"
-        >
-          made with ♥︎ by Seth
-        </a>
         <div className={styles.group}>
           <NavLink to="/catalog">
             {({ isActive }) => (

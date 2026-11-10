@@ -1,24 +1,3 @@
-// "made with ♥︎ by Seth" pill, next to the brand and in the mobile menu.
-@mixin made-by-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 9px;
-  border-radius: 999px;
-  background-color: var(--blue-600);
-  color: white;
-  font-size: 12px;
-  font-weight: var(--font-medium);
-  line-height: 1.2;
-  white-space: nowrap;
-  text-decoration: none;
-  transition: background-color 100ms ease-in-out;
-
-  &:hover {
-    background-color: var(--blue-700);
-    opacity: 1;
-  }
-}
-
 .menuOverlay {
   position: fixed;
   top: 0;
@@ -53,14 +32,6 @@
 
     &:global(.active) {
       opacity: 0.5;
-    }
-
-    &.menuMadeBy {
-      @include made-by-badge;
-
-      margin-top: 16px;
-      padding: 6px 12px;
-      font-size: 14px;
     }
   }
 
@@ -102,15 +73,6 @@
 
     &:hover {
       opacity: 0.8;
-    }
-  }
-
-  .madeBy {
-    @include made-by-badge;
-
-    // No room next to the brand on phones; it's in the menu there instead.
-    @media (width <= 480px) {
-      display: none;
     }
   }
 
