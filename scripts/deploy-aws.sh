@@ -86,10 +86,6 @@ fi
 git checkout -q -f -B main "\$after"
 git branch -q -u origin/main
 
-# Serve the frontend as a static production build (docker-compose.server.yml,
-# nginx.server.conf) instead of the Vite dev server. One-time switch.
-grep -q '^COMPOSE_FILE=' .env || { echo "COMPOSE_FILE=docker-compose.yml:docker-compose.server.yml" >> .env; switched=true; }
-
 if \$rebuild; then
   echo "==> npm install (dependencies changed)"
   npm install --no-audit --no-fund --loglevel=error >/tmp/deploy-npm.log 2>&1 || { tail -20 /tmp/deploy-npm.log; exit 1; }
@@ -103,8 +99,16 @@ fi
 # `current` symlink atomically: visitors get the old or the new build, never
 # a half-written one. Keeps the last 3 releases for quick rollback.
 SITE=/opt/eecstime-site
-if [ ! -e \$SITE/current ] || echo "\$changed" | grep -qE '^(apps/frontend|packages)/|(^|/)package-lock\.json\$'; then
+first_static=false
+[ -e \$SITE/current ] || first_static=true
+if \$first_static || echo "\$changed" | grep -qE '^(apps/frontend|packages)/|(^|/)package-lock\.json\$'; then
   echo "==> Building frontend release"
+  # npm skips Rollup's native binary when the lockfile was made on another
+  # platform (npm/cli#4828); vite build needs it.
+  node -e "require('@rollup/rollup-' + process.platform + '-' + process.arch + '-gnu')" 2>/dev/null || \
+    npm install --no-save --no-audit --no-fund --loglevel=error \
+      "@rollup/rollup-\$(node -p "process.platform+'-'+process.arch")-gnu@\$(node -p "require('rollup/package.json').version")" \
+      >/tmp/deploy-rollup.log 2>&1 || { tail -20 /tmp/deploy-rollup.log; exit 1; }
   release=\$(date -u +%Y%m%d%H%M%S)-\${after:0:9}
   mkdir -p \$SITE/releases
   (cd apps/frontend && npx vite build --outDir \$SITE/releases/\$release --emptyOutDir --logLevel error) >/tmp/deploy-vite.log 2>&1 || { tail -30 /tmp/deploy-vite.log; exit 1; }
@@ -112,7 +116,12 @@ if [ ! -e \$SITE/current ] || echo "\$changed" | grep -qE '^(apps/frontend|packa
   ls -1dt \$SITE/releases/* | tail -n +4 | xargs -r rm -rf
 fi
 
-if \$rebuild || [ "\${switched:-false}" = true ] || echo "\$changed" | grep -qE '^(nginx\.server\.conf|docker-compose\.server\.yml)\$'; then
+# Serve the frontend from that static build (docker-compose.server.yml,
+# nginx.server.conf) instead of the Vite dev server. One-time switch, only
+# once a release exists.
+grep -q '^COMPOSE_FILE=' .env || echo "COMPOSE_FILE=docker-compose.yml:docker-compose.server.yml" >> .env
+
+if \$rebuild || \$first_static || echo "\$changed" | grep -qE '^(nginx\.server\.conf|docker-compose\.server\.yml)\$'; then
   # Recreate only containers whose image or config changed (a short restart).
   echo "==> Applying container changes"
   docker compose up -d >/tmp/deploy-compose.log 2>&1 || { tail -30 /tmp/deploy-compose.log; exit 1; }
