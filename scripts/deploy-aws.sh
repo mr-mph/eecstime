@@ -3,13 +3,15 @@
 #
 #   bash scripts/deploy-aws.sh            # after `git push`
 #
-# Runs the update on the instance through SSM (no SSH needed): fetch + check
-# out origin/main, reinstall packages only if a package.json/lockfile changed,
-# regenerate GraphQL types, rebuild images whose Dockerfile/deps changed,
-# restart the containers whose code changed, then health-check the site.
-# Source folders are bind-mounted into the dev containers, so most changes are
-# live as soon as they're checked out. The server's .env is untracked and
-# never touched.
+# Runs the update on the instance through SSM (no SSH needed), keeping the
+# site up:
+#  - Code-only changes: check out origin/main; source folders are mounted into
+#    the dev containers, so Vite and the backend hot-reload. No restarts.
+#  - Dependency/Dockerfile/compose changes: first build the new images from a
+#    separate checkout (/opt/eecstime-build) while the live site keeps running,
+#    then switch the code and recreate just the changed containers.
+#  - The datapuller restarts if its code changed; nginx reloads its config.
+# Ends with a health check. The server's .env is untracked and never touched.
 #
 # Env overrides: AWS_REGION (default us-west-2), INSTANCE_ID (default: the
 # running instance tagged Name=eecstime).
@@ -42,42 +44,68 @@ fi
 read -r -d '' REMOTE <<EOF || true
 set -euo pipefail
 export HOME=/root PATH=\$PATH:/snap/bin
-cd /opt/eecstime
+LIVE=/opt/eecstime
+BUILD=/opt/eecstime-build
+cd \$LIVE
 git remote get-url origin >/dev/null 2>&1 || git remote add origin $REPO_URL
 before=\$(git rev-parse -q --verify HEAD || echo none)
 git fetch -q origin main
-git checkout -q -f -B main origin/main
-git branch -q -u origin/main
-after=\$(git rev-parse HEAD)
+after=\$(git rev-parse origin/main)
 if [ "\$before" = "\$after" ]; then
-  echo "Already at \$(git log -1 --format='%h %s')"
+  echo "Already at \$(git log -1 --format='%h %s' "\$after")"
   changed=""
 elif [ "\$before" = none ]; then
-  echo "Now tracking origin/main at \$(git log -1 --format='%h %s')"
-  changed=\$(git ls-files)
+  changed=\$(git ls-tree -r --name-only "\$after")
 else
-  echo "Updated \${before:0:9} -> \${after:0:9}:"
+  echo "Updating \${before:0:9} -> \${after:0:9}:"
   git log --format='  %h %s' "\$before..\$after" | head -20
   changed=\$(git diff --name-only "\$before" "\$after")
 fi
 
-if [ "\$before" != none ] && echo "\$changed" | grep -qE '(^|/)package(-lock)?\.json\$'; then
+# Images only need rebuilding when dependencies or Docker config change.
+rebuild=false
+echo "\$changed" | grep -qE '(^|/)(package(-lock)?\.json|Dockerfile)\$|^docker-compose\.ya?ml\$' && rebuild=true
+
+if \$rebuild; then
+  # Build new images from a separate checkout so the live site keeps running
+  # the current code (and its matching installed packages) during the build.
+  echo "==> Building updated images (live site untouched)"
+  if [ -d \$BUILD/.git ] || [ -f \$BUILD/.git ]; then
+    git -C \$BUILD checkout -q -f --detach "\$after"
+  else
+    git worktree add -q -f --detach \$BUILD "\$after"
+  fi
+  cp \$LIVE/.env \$BUILD/.env
+  (cd \$BUILD && docker compose -p eecstime build) >/tmp/deploy-build.log 2>&1 || { tail -30 /tmp/deploy-build.log; exit 1; }
+fi
+
+# Switch the live code. Source folders are mounted into the dev containers,
+# so Vite and the backend pick this up through hot reload.
+git checkout -q -f -B main "\$after"
+git branch -q -u origin/main
+
+if \$rebuild; then
+  # Recreate only the containers whose image changed (a short restart).
+  echo "==> Swapping in rebuilt containers"
+  docker compose up -d >/tmp/deploy-compose.log 2>&1 || { tail -30 /tmp/deploy-compose.log; exit 1; }
+  # nginx resolves container addresses at startup; pick up the new ones.
+  docker compose exec -T nginx nginx -s reload >/dev/null 2>&1 || docker compose restart nginx >/dev/null 2>&1
   echo "==> npm install (dependencies changed)"
   npm install --no-audit --no-fund --loglevel=error >/tmp/deploy-npm.log 2>&1 || { tail -20 /tmp/deploy-npm.log; exit 1; }
 fi
-echo "==> Generating GraphQL types"
-npx turbo run generate >/tmp/deploy-generate.log 2>&1 || { tail -20 /tmp/deploy-generate.log; exit 1; }
+if [ -n "\$changed" ]; then
+  echo "==> Generating GraphQL types"
+  npx turbo run generate >/tmp/deploy-generate.log 2>&1 || { tail -20 /tmp/deploy-generate.log; exit 1; }
+fi
 
-echo "==> docker compose up --build (rebuilds only what changed)"
-docker compose up -d --build >/tmp/deploy-compose.log 2>&1 || { tail -30 /tmp/deploy-compose.log; exit 1; }
-
-restart=""
-echo "\$changed" | grep -qE '^(apps/backend|packages)/' && restart="\$restart backend"
-echo "\$changed" | grep -qE '^(apps/datapuller|packages|scripts)/' && restart="\$restart datapuller"
-echo "\$changed" | grep -qE '^nginx\.conf\$' && restart="\$restart nginx"
-if [ -n "\$restart" ]; then
-  echo "==> Restarting:\$restart"
-  docker compose restart \$restart >/dev/null 2>&1
+# Background jobs only; visitors never notice.
+if echo "\$changed" | grep -qE '^(apps/datapuller|packages|scripts)/'; then
+  echo "==> Restarting datapuller"
+  docker compose restart datapuller >/dev/null 2>&1
+fi
+if echo "\$changed" | grep -qE '^nginx\.conf\$'; then
+  echo "==> Reloading nginx config"
+  docker compose exec -T nginx nginx -s reload >/dev/null 2>&1
 fi
 
 echo "==> Health check"
