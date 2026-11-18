@@ -4,18 +4,26 @@
  *
  * File (ANALYTICS_FILE, default apps/backend/data/analytics.json):
  *   {
- *     "version": 2,
+ *     "version": 3,
  *     "timezone": "America/Los_Angeles",
  *     "salt": "...",                                   // never changes
  *     "visitors": { "<id>": { "firstSeen": <ms>, "lastSeen": <ms> } },
+ *     "aliases": { "<key>": "<id>" },                  // identities -> visitor
  *     "days": { "2026-11-09": ["<id>", ...] },         // who visited each PT day
  *     "hours": { "2026-11-09T21": ["<id>", ...] }      // same per PT hour (31 days)
  *   }
  *
- * A visitor id is a salted hash of the browser fingerprint + IP + user agent;
- * raw fingerprints and IPs are never stored. The salt is kept in the file, so
- * the same visitor keeps the same id indefinitely, which is what makes unique
- * counts over a week, a month or all time possible (see summary()).
+ * Who is a visitor (see identify()): a heartbeat carries a random id the
+ * browser keeps in localStorage, the signed-in account (if any) and a
+ * FingerprintJS fingerprint. Each maps through `aliases` to one canonical
+ * visitor, so a person keeps the same id across days, networks and browser
+ * updates, and across devices once they sign in. When two records turn out to
+ * be the same person they're merged, so counts only ever shrink toward the
+ * truth. Only salted hashes are stored, never raw ids, fingerprints or IPs.
+ *
+ * Version 2 ids (hash of fingerprint + IP + user agent) are matched on a
+ * visitor's first new-style heartbeat, so existing visitors keep their
+ * history instead of being counted again.
  */
 import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -32,12 +40,25 @@ const KEEP_HOURS_DAYS = 31;
 
 type Visitor = { firstSeen: number; lastSeen: number };
 type AnalyticsFile = {
-  version: 2;
+  version: 3;
   timezone: string;
   salt: string;
   visitors: Record<string, Visitor>;
+  aliases: Record<string, string>;
   days: Record<string, string[]>;
   hours: Record<string, string[]>;
+};
+
+/** What a heartbeat tells us about who's visiting. */
+export type VisitorIdentity = {
+  /** Random id kept in the browser's localStorage (null if storage is blocked). */
+  clientId: string | null;
+  /** Signed-in account id, if any. */
+  userId: string | null;
+  /** FingerprintJS visitor id. */
+  fingerprint: string;
+  ip: string;
+  userAgent: string;
 };
 
 export type AnalyticsSummary = {
@@ -103,8 +124,10 @@ export class PresenceStore {
   private load(): AnalyticsFile {
     try {
       const parsed = JSON.parse(readFileSync(this.file, "utf8"));
-      if (parsed?.version === 2 && parsed.salt) {
+      if ((parsed?.version === 2 || parsed?.version === 3) && parsed.salt) {
+        parsed.version = 3;
         parsed.visitors ??= {};
+        parsed.aliases ??= {};
         parsed.days ??= {};
         parsed.hours ??= {};
         return parsed as AnalyticsFile;
@@ -120,15 +143,97 @@ export class PresenceStore {
   }
 
   private empty(salt: string): AnalyticsFile {
-    return { version: 2, timezone: TIMEZONE, salt, visitors: {}, days: {}, hours: {} };
+    return {
+      version: 3,
+      timezone: TIMEZONE,
+      salt,
+      visitors: {},
+      aliases: {},
+      days: {},
+      hours: {},
+    };
   }
 
-  /** Stable, non-reversible visitor id from fingerprint + IP + user agent. */
-  visitorId(fingerprint: string, ip: string, userAgent: string) {
+  private hash(value: string) {
     return createHash("sha256")
-      .update(`${this.data.salt}|${fingerprint}|${ip}|${userAgent}`)
+      .update(`${this.data.salt}|${value}`)
       .digest("base64url")
       .slice(0, 22);
+  }
+
+  /** Version 2 visitor id: fingerprint + IP + user agent. */
+  legacyVisitorId(fingerprint: string, ip: string, userAgent: string) {
+    return this.hash(`${fingerprint}|${ip}|${userAgent}`);
+  }
+
+  /**
+   * Resolve a heartbeat to its canonical visitor id, linking every identity
+   * it carries to that visitor:
+   *  1. the signed-in account, if already linked to a visitor;
+   *  2. the browser's stored id, if already linked;
+   *  3. the version 2 id (no count spike when switching schemes);
+   *  4. the fingerprint alone, but only when the browser can't store an id
+   *     (identical devices can share a fingerprint);
+   *  5. otherwise a new visitor.
+   * If the account and the browser point at different visitors (e.g. signing
+   * in on a second device), the browser's visitor is merged into the
+   * account's.
+   */
+  identify(who: VisitorIdentity): string {
+    const keys: string[] = [];
+    if (who.userId) keys.push(`u:${this.hash(`user|${who.userId}`)}`);
+    if (who.clientId) keys.push(`c:${this.hash(`client|${who.clientId}`)}`);
+    else keys.push(`f:${this.hash(`fingerprint|${who.fingerprint}`)}`);
+
+    const known = keys
+      .map((key) => this.data.aliases[key])
+      .filter((id): id is string => !!id && !!this.data.visitors[id]);
+    const legacy = this.legacyVisitorId(who.fingerprint, who.ip, who.userAgent);
+    const legacyUnclaimed =
+      !!this.data.visitors[legacy] &&
+      !Object.values(this.data.aliases).includes(legacy);
+
+    let id = known[0];
+    if (!id && this.data.visitors[legacy]) id = legacy;
+    if (!id) id = keys[0].slice(2);
+
+    // Same person under another record: fold it in.
+    for (const other of new Set(known)) if (other !== id) this.merge(other, id);
+    // A version 2 record for this browser that nothing claims yet (seen before
+    // the switch) is this visitor too.
+    if (legacyUnclaimed && legacy !== id) this.merge(legacy, id);
+
+    for (const key of keys) this.data.aliases[key] = id;
+    return id;
+  }
+
+  /** Fold visitor `from` into `to` (history, aliases), dropping `from`. */
+  private merge(from: string, to: string) {
+    const a = this.data.visitors[from];
+    const b = this.data.visitors[to];
+    if (a) {
+      this.data.visitors[to] = {
+        firstSeen: Math.min(a.firstSeen, b?.firstSeen ?? a.firstSeen),
+        lastSeen: Math.max(a.lastSeen, b?.lastSeen ?? a.lastSeen),
+      };
+      delete this.data.visitors[from];
+    }
+    const groups: [Map<string, Set<string>>, Record<string, string[]>][] = [
+      [this.daySets, this.data.days],
+      [this.hourSets, this.data.hours],
+    ];
+    for (const [sets, lists] of groups) {
+      for (const [key, set] of sets) {
+        if (!set.has(from)) continue;
+        set.delete(from);
+        set.add(to);
+        lists[key] = [...set];
+      }
+    }
+    for (const [key, id] of Object.entries(this.data.aliases)) {
+      if (id === from) this.data.aliases[key] = to;
+    }
+    this.scheduleWrite();
   }
 
   /** Record a heartbeat. */

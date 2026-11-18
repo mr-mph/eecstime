@@ -1,12 +1,14 @@
 /**
  * Rough visitor analytics.
  *
- *   POST /analytics/heartbeat  { visitorId }   record a visit (204, no data)
+ *   POST /analytics/heartbeat  { visitorId, clientId }  record a visit (204)
  *   GET  /analytics/summary                    counts for the /analytics page
  *
- * The frontend sends a FingerprintJS visitorId on load and every minute while
- * the tab is visible. Counts are kept in a JSON file and logged hourly (see
- * store.ts). The summary only has aggregate counts, never visitor ids.
+ * The frontend sends a FingerprintJS visitorId plus a random clientId kept in
+ * localStorage, on load and every minute while the tab is visible; the session
+ * cookie identifies signed-in users (see identify() in store.ts). Counts are
+ * kept in a JSON file and logged hourly. The summary only has aggregate
+ * counts, never visitor ids.
  */
 import { type Application, type Request, type Response } from "express";
 
@@ -30,6 +32,7 @@ export default (app: Application) => {
 
   app.post("/analytics/heartbeat", (req: Request, res: Response) => {
     const fingerprint = req.body?.visitorId;
+    const rawClientId = req.body?.clientId;
     const userAgent = req.headers["user-agent"] ?? "";
     if (
       typeof fingerprint !== "string" ||
@@ -39,9 +42,22 @@ export default (app: Application) => {
       res.status(400).json({ error: "visitorId required" });
       return;
     }
+    const clientId =
+      typeof rawClientId === "string" &&
+      rawClientId.length > 0 &&
+      rawClientId.length <= 128
+        ? rawClientId
+        : null;
+    const user = req.user as { _id?: unknown } | undefined;
     if (!BOT_UA.test(userAgent)) {
       presenceStore.touch(
-        presenceStore.visitorId(fingerprint, clientIp(req), userAgent)
+        presenceStore.identify({
+          clientId,
+          userId: user?._id ? String(user._id) : null,
+          fingerprint,
+          ip: clientIp(req),
+          userAgent,
+        })
       );
     }
     res.status(204).end();

@@ -1,6 +1,26 @@
 import { useEffect } from "react";
 
 const HEARTBEAT_MS = 60_000;
+const CLIENT_ID_KEY = "bt.visitorId";
+
+/**
+ * A random id this browser keeps across visits, so the same person is
+ * recognized across days, networks and browser updates. Null when storage is
+ * unavailable (some private modes); the backend then falls back to the
+ * fingerprint.
+ */
+const getClientId = (): string | null => {
+  try {
+    let id = localStorage.getItem(CLIENT_ID_KEY);
+    if (!id) {
+      id = crypto.randomUUID();
+      localStorage.setItem(CLIENT_ID_KEY, id);
+    }
+    return id;
+  } catch {
+    return null;
+  }
+};
 
 // One fingerprint per page load.
 let visitorIdPromise: Promise<string> | null = null;
@@ -24,7 +44,9 @@ export default function useVisitorHeartbeat() {
         await fetch("/api/analytics/heartbeat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ visitorId }),
+          // The session cookie also goes along (same origin), which lets the
+          // backend link signed-in visitors across devices.
+          body: JSON.stringify({ visitorId, clientId: getClientId() }),
           keepalive: true,
         });
       } catch {
