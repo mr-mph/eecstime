@@ -30,10 +30,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const TIMEZONE = "America/Los_Angeles";
-/** "Online now" = heartbeat within this window (clients ping every minute). */
-const ONLINE_WINDOW_MS = 5 * 60_000;
 const HOUR_MS = 60 * 60_000;
-const DAY_MS = 24 * HOUR_MS;
 const WRITE_DEBOUNCE_MS = 10_000;
 /** Hourly visitor lists are pruned after this many days; daily ones are kept. */
 const KEEP_HOURS_DAYS = 31;
@@ -61,13 +58,13 @@ export type VisitorIdentity = {
   userAgent: string;
 };
 
+/** Unique visitors in each calendar period (Pacific time, weeks start Monday). */
 export type AnalyticsSummary = {
   thisHour: number;
-  onlineNow: number;
-  last24h: number;
   today: number;
-  last7Days: number;
-  last30Days: number;
+  thisWeek: number;
+  thisMonth: number;
+  thisYear: number;
   allTime: number;
 };
 
@@ -264,21 +261,14 @@ export class PresenceStore {
     }
   }
 
-  /** Unique visitors across the last `days` PT days (including today). */
-  private uniqueOverDays(now: number, days: number) {
+  /** Unique visitors from PT day `from` through `to` (inclusive). */
+  private uniqueBetween(from: string, to: string) {
     const ids = new Set<string>();
-    for (const day of dayRange(dayKey(now), days)) {
-      for (const id of this.daySets.get(day) ?? []) ids.add(id);
+    for (const [day, set] of this.daySets) {
+      if (day < from || day > to) continue;
+      for (const id of set) ids.add(id);
     }
     return ids.size;
-  }
-
-  /** Unique visitors per PT hour for the last `hours` hours, oldest first. */
-  hourly(now: number, hours: number) {
-    return Array.from({ length: hours }, (_, i) => {
-      const hour = hourKey(now - (hours - 1 - i) * HOUR_MS);
-      return { hour, visitors: this.hourSets.get(hour)?.size ?? 0 };
-    }).filter((h, i, all) => i === 0 || h.hour !== all[i - 1].hour); // DST repeat
   }
 
   /** Unique visitors per PT day for the last `days` days, oldest first. */
@@ -290,19 +280,16 @@ export class PresenceStore {
   }
 
   summary(now = Date.now()): AnalyticsSummary {
-    let onlineNow = 0;
-    let last24h = 0;
-    for (const { lastSeen } of Object.values(this.data.visitors)) {
-      if (now - lastSeen <= ONLINE_WINDOW_MS) onlineNow += 1;
-      if (now - lastSeen <= DAY_MS) last24h += 1;
-    }
+    const today = dayKey(now);
+    const [y, m, d] = today.split("-").map(Number);
+    const sinceMonday = (new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7;
+    const weekStart = dayRange(today, sinceMonday + 1)[0];
     return {
       thisHour: this.hourSets.get(hourKey(now))?.size ?? 0,
-      onlineNow,
-      last24h,
-      today: this.daySets.get(dayKey(now))?.size ?? 0,
-      last7Days: this.uniqueOverDays(now, 7),
-      last30Days: this.uniqueOverDays(now, 30),
+      today: this.daySets.get(today)?.size ?? 0,
+      thisWeek: this.uniqueBetween(weekStart, today),
+      thisMonth: this.uniqueBetween(`${today.slice(0, 7)}-01`, today),
+      thisYear: this.uniqueBetween(`${today.slice(0, 4)}-01-01`, today),
       allTime: Object.keys(this.data.visitors).length,
     };
   }
@@ -346,8 +333,8 @@ export const presenceStore = new PresenceStore(
 );
 
 const formatSummary = (s: AnalyticsSummary) =>
-  `this hour ${s.thisHour} · online now ${s.onlineNow} · last 24h ${s.last24h} · today ${s.today} · ` +
-  `7 days ${s.last7Days} · 30 days ${s.last30Days} · all time ${s.allTime}`;
+  `this hour ${s.thisHour} · today ${s.today} · this week ${s.thisWeek} · ` +
+  `this month ${s.thisMonth} · this year ${s.thisYear} · all time ${s.allTime}`;
 
 /**
  * Log a summary at startup and every hour, plus a line for each finished PT

@@ -70,7 +70,6 @@ export default (app: Application) => {
       generatedAt: new Date(now).toISOString(),
       timezone: "America/Los_Angeles",
       totals: presenceStore.summary(now),
-      hourly: presenceStore.hourly(now, 48),
       daily: presenceStore.daily(now, 90),
     });
   });

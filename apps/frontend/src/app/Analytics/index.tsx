@@ -20,15 +20,12 @@ interface AnalyticsSummary {
   generatedAt: string;
   totals: {
     thisHour: number;
-    onlineNow: number;
-    last24h: number;
     today: number;
-    last7Days: number;
-    last30Days: number;
+    thisWeek: number;
+    thisMonth: number;
+    thisYear: number;
     allTime: number;
   };
-  /** "YYYY-MM-DDTHH" in Pacific time, oldest first. */
-  hourly: { hour: string; visitors: number }[];
   /** "YYYY-MM-DD" in Pacific time, oldest first. */
   daily: { day: string; visitors: number }[];
 }
@@ -52,40 +49,18 @@ const shortDay = (day: string) => {
 };
 const longDay = (day: string) =>
   `${WEEKDAYS[parseDay(day).getUTCDay()]}, ${shortDay(day)}`;
-const clock = (hour: number) =>
-  `${hour % 12 || 12} ${hour < 12 ? "AM" : "PM"}`;
-
-/** Axis tick for an hour key: the weekday at midnight, otherwise the time. */
-const hourTick = (key: string) => {
-  const hour = Number(key.slice(11, 13));
-  return hour === 0 ? WEEKDAYS[parseDay(key.slice(0, 10)).getUTCDay()] : clock(hour);
-};
-const hourLabel = (key: string) => {
-  const hour = Number(key.slice(11, 13));
-  return `${longDay(key.slice(0, 10))}, ${clock(hour)}–${clock((hour + 1) % 24)}`;
-};
 
 const axisTick = { fill: "var(--paragraph-color)", fontSize: "var(--text-12)" };
 
-function VisitorsChart<T extends { visitors: number }>({
-  data,
-  dataKey,
-  tickFormatter,
-  labelFormatter,
-}: {
-  data: T[];
-  dataKey: keyof T & string;
-  tickFormatter: (value: string) => string;
-  labelFormatter: (value: string) => string;
-}) {
+function VisitorsChart({ data }: { data: AnalyticsSummary["daily"] }) {
   return (
     <ChartContainer config={chartConfig} className={styles.chart}>
       <ResponsiveContainer width="100%" height={220}>
         <BarChart data={data} barCategoryGap="12%" accessibilityLayer={false}>
           <CartesianGrid vertical={false} stroke="var(--border-color)" />
           <XAxis
-            dataKey={dataKey}
-            tickFormatter={tickFormatter}
+            dataKey="day"
+            tickFormatter={shortDay}
             tick={axisTick}
             tickLine={false}
             axisLine={false}
@@ -103,7 +78,7 @@ function VisitorsChart<T extends { visitors: number }>({
             cursor={{ fill: "var(--border-color)", opacity: 0.5, radius: 4 }}
             tooltipConfig={{
               indicator: "square",
-              labelFormatter: (label: string) => labelFormatter(label),
+              labelFormatter: (label: string) => longDay(label),
               valueFormatter: (value: number) => value.toLocaleString(),
             }}
           />
@@ -127,7 +102,7 @@ function DataTable({ rows }: { rows: [string, number][] }) {
       <table>
         <thead>
           <tr>
-            <th scope="col">Time</th>
+            <th scope="col">Day</th>
             <th scope="col">Unique visitors</th>
           </tr>
         </thead>
@@ -174,11 +149,10 @@ export default function Analytics() {
   const totals = data?.totals;
   const tiles: [string, number | undefined][] = [
     ["This hour", totals?.thisHour],
-    ["Online now", totals?.onlineNow],
     ["Today", totals?.today],
-    ["Last 24 hours", totals?.last24h],
-    ["Last 7 days", totals?.last7Days],
-    ["Last 30 days", totals?.last30Days],
+    ["This week", totals?.thisWeek],
+    ["This month", totals?.thisMonth],
+    ["This year", totals?.thisYear],
     ["All time", totals?.allTime],
   ];
 
@@ -187,7 +161,7 @@ export default function Analytics() {
       <Container className={styles.container}>
         <h1 className={styles.title}>Analytics</h1>
         <p className={styles.subtitle}>
-          Unique visitors, Pacific time.{" "}
+          Unique visitors, Pacific time; weeks start Monday.{" "}
           {error
             ? "Couldn't load the latest numbers; retrying."
             : data
@@ -207,35 +181,14 @@ export default function Analytics() {
         </div>
 
         {data && (
-          <>
-            <section className={styles.card}>
-              <h2 className={styles.heading}>Last 48 hours</h2>
-              <p className={styles.caption}>Unique visitors per hour</p>
-              <VisitorsChart
-                data={data.hourly}
-                dataKey="hour"
-                tickFormatter={hourTick}
-                labelFormatter={hourLabel}
-              />
-              <DataTable
-                rows={data.hourly.map((h) => [hourLabel(h.hour), h.visitors])}
-              />
-            </section>
-
-            <section className={styles.card}>
-              <h2 className={styles.heading}>Last 90 days</h2>
-              <p className={styles.caption}>Unique visitors per day</p>
-              <VisitorsChart
-                data={data.daily}
-                dataKey="day"
-                tickFormatter={shortDay}
-                labelFormatter={longDay}
-              />
-              <DataTable
-                rows={data.daily.map((d) => [longDay(d.day), d.visitors])}
-              />
-            </section>
-          </>
+          <section className={styles.card}>
+            <h2 className={styles.heading}>Last 90 days</h2>
+            <p className={styles.caption}>Unique visitors per day</p>
+            <VisitorsChart data={data.daily} />
+            <DataTable
+              rows={data.daily.map((d) => [longDay(d.day), d.visitors])}
+            />
+          </section>
         )}
       </Container>
     </div>
